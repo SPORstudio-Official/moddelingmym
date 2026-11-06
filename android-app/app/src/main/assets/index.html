@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Code Reviewer</title>
+<style>
+  :root {
+    --bg: #f4f6fb; --card: #ffffff; --text: #1d2433; --muted: #6b7388;
+    --accent: #3b5bdb; --border: #dfe3ee;
+    --err: #d6336c; --warn: #e8590c; --info: #1c7ed6; --ok: #2b8a3e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111520; --card: #1b2130; --text: #e7ebf5; --muted: #98a2b8; --border: #2c3447; --accent: #748ffc; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 15px; }
+  header { background: var(--accent); color: #fff; padding: 14px 16px; position: sticky; top: 0; z-index: 5; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 700; }
+  header p { margin: 2px 0 0; font-size: 12px; opacity: .85; }
+  main { padding: 12px; max-width: 760px; margin: 0 auto; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+  label.small { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  select, textarea { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+  select { padding: 8px 10px; }
+  textarea#code { font-family: "Roboto Mono", Menlo, Consolas, monospace; font-size: 13px; min-height: 220px; resize: vertical; white-space: pre; overflow: auto; tab-size: 4; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer; background: var(--border); color: var(--text); }
+  button.primary { background: var(--accent); color: #fff; font-weight: 600; flex: 1; }
+  button:active { opacity: .8; }
+  .meta { font-size: 12px; color: var(--muted); margin-left: auto; }
+  .summary { display: flex; gap: 12px; align-items: center; }
+  .score { width: 68px; height: 68px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 20px; color: #fff; flex: none; }
+  .verdict { font-size: 14px; line-height: 1.4; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .chip { padding: 5px 10px; border-radius: 999px; font-size: 12px; background: var(--bg); border: 1px solid var(--border); color: var(--text); }
+  .chip.active { background: var(--text); color: var(--card); border-color: var(--text); }
+  .issue { border-left: 4px solid var(--muted); padding: 10px 10px 10px 12px; background: var(--bg); border-radius: 8px; margin-top: 8px; cursor: pointer; }
+  .issue.error { border-left-color: var(--err); }
+  .issue.warning { border-left-color: var(--warn); }
+  .issue.info { border-left-color: var(--info); }
+  .issue-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .badge { font-size: 10px; font-weight: 800; letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; color: #fff; text-transform: uppercase; }
+  .badge.error { background: var(--err); } .badge.warning { background: var(--warn); } .badge.info { background: var(--info); }
+  .issue-msg { font-weight: 600; margin-top: 4px; line-height: 1.35; }
+  .issue-snip { font-family: "Roboto Mono", Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); margin-top: 4px; white-space: pre-wrap; word-break: break-all; }
+  .issue-rec { font-size: 13px; margin-top: 6px; line-height: 1.4; }
+  .issue-rec b { color: var(--ok); }
+  .empty { text-align: center; color: var(--muted); padding: 18px 8px; font-size: 14px; }
+  footer { text-align: center; color: var(--muted); font-size: 11px; padding: 6px 0 18px; }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #000c; color: #fff;
+    padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Code Reviewer</h1>
+  <p>Paste code, get rule-based error checks and fix recommendations. Works offline.</p>
+</header>
+
+<main>
+  <section class="card">
+    <label class="small" for="lang">Language</label>
+    <select id="lang">
+      <option value="auto">Auto-detect</option>
+      <option value="javascript">JavaScript / TypeScript</option>
+      <option value="python">Python</option>
+      <option value="java">Java</option>
+      <option value="c">C</option>
+      <option value="json">JSON</option>
+      <option value="html">HTML</option>
+    </select>
+
+    <div style="height:10px"></div>
+    <label class="small" for="code">Paste your code</label>
+    <textarea id="code" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="Paste code here..."></textarea>
+
+    <div class="row">
+      <button class="primary" id="reviewBtn">Review code</button>
+      <button id="clearBtn">Clear</button>
+    </div>
+    <div class="row"><span class="meta" id="stats">0 lines · 0 characters</span></div>
+  </section>
+
+  <section class="card" id="resultCard">
+    <div id="emptyState" class="empty">Your review will appear here.</div>
+    <div id="resultBody" hidden>
+      <div class="summary">
+        <div class="score" id="score">--</div>
+        <div>
+          <div class="verdict" id="verdict"></div>
+          <div class="meta" id="langLabel" style="margin:4px 0 0"></div>
+        </div>
+      </div>
+      <div class="chips" id="filters">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="error">Errors</button>
+        <button class="chip" data-filter="warning">Warnings</button>
+        <button class="chip" data-filter="info">Suggestions</button>
+      </div>
+      <div id="issues"></div>
+      <div class="row"><button id="copyBtn">Copy report</button></div>
+    </div>
+  </section>
+
+  <footer>Rule-based analysis · no AI · no network access</footer>
+</main>
+
+<div id="toast"></div>
+
+<script src="analyzer.js"></script>
+<script>
+(function () {
+  var DRAFT_KEY = 'codeReviewer.draft';
+  var LANG_KEY = 'codeReviewer.lang';
+  var codeEl = document.getElementById('code');
+  var langEl = document.getElementById('lang');
+  var statsEl = document.getElementById('stats');
+  var resultBody = document.getElementById('resultBody');
+  var emptyState = document.getElementById('emptyState');
+  var issuesEl = document.getElementById('issues');
+  var scoreEl = document.getElementById('score');
+  var verdictEl = document.getElementById('verdict');
+  var langLabel = document.getElementById('langLabel');
+  var filterEl = document.getElementById('filters');
+  var toastEl = document.getElementById('toast');
+  var current = null;
+  var activeFilter = 'all';
+
+  function safeGet(key) { try { return window.localStorage.getItem(key); } catch (e) { return null; } }
+  function safeSet(key, value) { try { window.localStorage.setItem(key, value); } catch (e) {} }
+
+  function esc(text) {
+    return String(text).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toast.t);
+    toast.t = setTimeout(function () { toastEl.classList.remove('show'); }, 1600);
+  }
+
+  function updateStats() {
+    var text = codeEl.value;
+    var lines = text.length ? text.split('\n').length : 0;
+    statsEl.textContent = lines + ' lines · ' + text.length + ' characters';
+  }
+
+  function scoreColor(score) {
+    if (score >= 90) return 'var(--ok)';
+    if (score >= 70) return 'var(--info)';
+    if (score >= 50) return 'var(--warn)';
+    return 'var(--err)';
+  }
+
+  function render() {
+    if (!current) return;
+    resultBody.hidden = false;
+    emptyState.hidden = true;
+    scoreEl.textContent = current.score;
+    scoreEl.style.background = scoreColor(current.score);
+    verdictEl.textContent = current.verdict;
+    langLabel.textContent = 'Detected: ' + current.language + ' · ' +
+      current.counts.error + ' errors · ' + current.counts.warning + ' warnings · ' + current.counts.info + ' suggestions';
+
+    var list = current.issues.filter(function (i) { return activeFilter === 'all' || i.severity === activeFilter; });
+    if (!current.issues.length) {
+      issuesEl.innerHTML = '<div class="empty">No issues found by the rule set. Nice work.</div>';
+      return;
+    }
+    if (!list.length) {
+      issuesEl.innerHTML = '<div class="empty">No items in this filter.</div>';
+      return;
+    }
+    issuesEl.innerHTML = list.map(function (i, idx) {
+      return '<div class="issue ' + i.severity + '" data-line="' + i.line + '" data-idx="' + idx + '">' +
+        '<div class="issue-head"><span class="badge ' + i.severity + '">' + i.severity + '</span>' +
+        '<span>Line ' + i.line + '</span><span>· ' + esc(i.category) + '</span></div>' +
+        '<div class="issue-msg">' + esc(i.message) + '</div>' +
+        (i.snippet ? '<div class="issue-snip">' + esc(i.snippet) + '</div>' : '') +
+        '<div class="issue-rec"><b>Recommendation:</b> ' + esc(i.recommendation) + '</div>' +
+        '</div>';
+    }).join('');
+  }
+
+  function jumpToLine(line) {
+    var lines = codeEl.value.split('\n');
+    var offset = 0;
+    for (var i = 0; i < line - 1 && i < lines.length; i++) offset += lines[i].length + 1;
+    codeEl.focus();
+    codeEl.setSelectionRange(offset, offset + (lines[line - 1] || '').length);
+    // Scroll the textarea so the selected line is visible.
+    var lineHeight = parseFloat(getComputedStyle(codeEl).lineHeight) || 18;
+    codeEl.scrollTop = Math.max(0, (line - 3) * lineHeight);
+  }
+
+  function review() {
+    var result = window.CodeAnalyzer.analyze(codeEl.value, { language: langEl.value });
+    current = result;
+    render();
+    var card = document.getElementById('resultCard');
+    if (card.scrollIntoView) card.scrollIntoView({ block: 'start' });
+  }
+
+  function copyText(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  // Events
+  document.getElementById('reviewBtn').addEventListener('click', function () {
+    if (!codeEl.value.trim()) { toast('Paste some code first'); return; }
+    review();
+  });
+  document.getElementById('clearBtn').addEventListener('click', function () {
+    codeEl.value = '';
+    current = null;
+    resultBody.hidden = true;
+    emptyState.hidden = false;
+    safeSet(DRAFT_KEY, '');
+    updateStats();
+    codeEl.focus();
+  });
+  document.getElementById('copyBtn').addEventListener('click', function () {
+    if (!current) return;
+    toast(copyText(window.CodeAnalyzer.formatReport(current)) ? 'Report copied' : 'Copy not available');
+  });
+  filterEl.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-filter]');
+    if (!btn) return;
+    activeFilter = btn.getAttribute('data-filter');
+    Array.prototype.forEach.call(filterEl.querySelectorAll('.chip'), function (c) {
+      c.classList.toggle('active', c === btn);
+    });
+    render();
+  });
+  issuesEl.addEventListener('click', function (e) {
+    var card = e.target.closest('.issue');
+    if (card) jumpToLine(parseInt(card.getAttribute('data-line'), 10));
+  });
+  langEl.addEventListener('change', function () { safeSet(LANG_KEY, langEl.value); });
+  codeEl.addEventListener('input', function () {
+    updateStats();
+    safeSet(DRAFT_KEY, codeEl.value);
+  });
+  // Tab key inserts spaces instead of moving focus (handy for pasted code).
+  codeEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      var s = codeEl.selectionStart, end = codeEl.selectionEnd;
+      codeEl.value = codeEl.value.substring(0, s) + '    ' + codeEl.value.substring(end);
+      codeEl.selectionStart = codeEl.selectionEnd = s + 4;
+      safeSet(DRAFT_KEY, codeEl.value);
+      updateStats();
+    }
+  });
+
+  // Restore the last draft and language on launch.
+  var draft = safeGet(DRAFT_KEY);
+  if (draft) codeEl.value = draft;
+  var savedLang = safeGet(LANG_KEY);
+  if (savedLang) langEl.value = savedLang;
+  updateStats();
+})();
+</script>
+</body>
+</html>

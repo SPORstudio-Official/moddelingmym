@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download Code Reviewer</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: #f4f6fb; color: #1d2433; }
+  main { background: #fff; border-radius: 14px; padding: 28px; max-width: 460px; width: calc(100% - 40px);
+    box-shadow: 0 6px 24px #0001; text-align: center; }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  p { color: #6b7388; line-height: 1.45; }
+  a.btn { display: inline-block; margin-top: 14px; background: #3b5bdb; color: #fff; text-decoration: none;
+    padding: 12px 22px; border-radius: 10px; font-weight: 600; }
+  code { font-size: 11px; word-break: break-all; color: #6b7388; }
+  small { display: block; margin-top: 16px; color: #6b7388; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Code Reviewer</h1>
+  <p>Rule-based code review for Android. Paste code, get errors and recommendations. No AI, works offline.</p>
+  <a class="btn" id="dl" href="CodeReviewer.apk" download="CodeReviewer.apk">Download APK (16 KB)</a>
+  <small>Download starts automatically. If it does not, tap the button above.</small>
+  <small>Version 1.0.0 · Android 21+ · SHA-256 <code>a2eee1813eb2ee8f0a116504097947e41570b6dce944056e0ca12c72afaf62ce</code></small>
+  <small>To install: open the file and allow "Install unknown apps" for your browser.</small>
+</main>
+<script>
+  // Start the download as soon as the page opens.
+  window.addEventListener('load', function () {
+    setTimeout(function () { document.getElementById('dl').click(); }, 300);
+  });
+</script>
+</body>
+</html>
