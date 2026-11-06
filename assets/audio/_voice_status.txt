@@ -1,2 +1,17 @@
-17:06:24  env vars with a value: NONE
-17:06:24  no API key found -> cannot record
+17:06:58  env vars with a value: DISPATCH_KEY
+17:06:58  using DISPATCH_KEY (len 73); model=fish-audio/s2.1-pro-free:free voice=default
+17:06:59  models: 417 total, 47 audio/fish candidates: stealth/crouton-alpha, meta/muse-spark-open, google/gemini-4-argon, google/gemini-4-argon:batch, meta/muse-wonder, perceptron/perceptron-mk1.5, xiaomi/mimo-v2.6-pro-ultraspeed, xiaomi/mimo-v2.6-flash, xiaomi/mimo-v2.6-pro, qwen/qwen3.8-omni-flash, google/gemini-3.8-flash, google/gemini-3.8-flash:batch, google/gemini-3.7-flash, google/gemini-3.7-flash:batch, thinkingmachines/inkling-small, google/gemini-3.6-flash, google/gemini-3.6-flash:batch, google/gemini-3.5-flash-lite, google/gemini-3.5-flash-lite:batch, thinkingmachines/inkling, google/gemini-3.5-flash, google/gemini-3.5-flash:batch, google/gemini-3.1-flash-lite, google/gemini-3.1-flash-lite:batch, nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+17:07:09  A speech model=fish-audio/s2.1-pro-free:free voice=None fmt=mp3 -> 200 audio/mpeg 
+17:07:09  OK assets/audio/tape1.wav  19.1s  1643 KB
+17:07:20  A speech model=fish-audio/s2.1-pro-free:free voice=None fmt=mp3 -> 200 audio/mpeg 
+17:07:20  OK assets/audio/tape2.wav  22.6s  1951 KB
+17:07:30  A speech model=fish-audio/s2.1-pro-free:free voice=None fmt=mp3 -> 200 audio/mpeg 
+17:07:30  OK assets/audio/tape3.wav  20.7s  1784 KB
+17:07:40  A speech model=fish-audio/s2.1-pro-free:free voice=None fmt=mp3 -> 200 audio/mpeg 
+17:07:40  OK assets/audio/tape4.wav  20.3s  1748 KB
+17:07:47  A speech model=fish-audio/s2.1-pro-free:free voice=None fmt=mp3 -> 200 audio/mpeg 
+17:07:47  OK assets/audio/tape5.wav  12.1s  1046 KB
+17:07:51  A speech model=fish-audio/s2.1-pro-free:free voice=None fmt=mp3 -> 200 audio/mpeg 
+17:07:51  OK assets/audio/entity.wav  7.0s  601 KB
+17:07:51  rebuilding src/audio_data.h
+17:07:51  DONE
