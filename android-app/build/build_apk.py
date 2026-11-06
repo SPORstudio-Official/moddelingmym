@@ -16,6 +16,7 @@ Output: android-app/release/CodeReviewer.apk
 
 import base64
 import hashlib
+import io
 import os
 import shutil
 import struct
@@ -416,6 +417,85 @@ def build_dex():
 
 
 # ---------------------------------------------------------------------------
+# APK Signature Scheme v2 (inserted as an APK Signing Block before the
+# central directory). Modern Android installers expect this block; v1 alone
+# is not accepted by every Android version.
+# ---------------------------------------------------------------------------
+V2_BLOCK_ID = 0x7109871A
+SIG_ALG_RSA_PKCS1_SHA256 = 0x0103
+APK_SIG_MAGIC = b'APK Sig Block 42'
+CHUNK = 1024 * 1024
+
+
+def lp(b):
+    return struct.pack('<I', len(b)) + b
+
+
+def _openssl_bytes(args, stdin_bytes=None):
+    return subprocess.run(args, input=stdin_bytes, stdout=subprocess.PIPE, check=True).stdout
+
+
+def add_v2_signature(apk, key, cert):
+    """Return apk bytes with a v2 signing block inserted."""
+    eocd = len(apk) - 22
+    if apk[eocd:eocd + 4] != b'PK\x05\x06':
+        raise ValueError('EOCD not found at end of APK (zip comment not supported)')
+    cd_off = struct.unpack_from('<I', apk, eocd + 16)[0]
+    sec_a = apk[:cd_off]
+    sec_b = apk[cd_off:eocd]
+
+    cert_der = _openssl_bytes(['openssl', 'x509', '-in', cert, '-outform', 'DER'])
+    pub_der = _openssl_bytes(['openssl', 'x509', '-in', cert, '-pubkey', '-noout'])
+    pub_der = _openssl_bytes(['openssl', 'pkey', '-pubin', '-outform', 'DER'], pub_der)
+
+    # Digest of the file contents: 3 sections, each split into 1 MiB chunks.
+    # The EOCD is hashed with its central-directory offset pointing at the signing block.
+    block_pairs_len_placeholder = None
+
+    def chunk_digests(parts):
+        digests = []
+        for part in parts:
+            for i in range(0, len(part), CHUNK):
+                c = part[i:i + CHUNK]
+                digests.append(hashlib.sha256(b'\xa5' + struct.pack('<I', len(c)) + c).digest())
+        return digests
+
+    # First pass to know the signing-block size (it does not depend on the digest value).
+    dummy_digest = b'\x00' * 32
+    def build_signer(content_digest, sign_fn):
+        digests_seq = lp(struct.pack('<I', SIG_ALG_RSA_PKCS1_SHA256) + lp(content_digest))
+        certs_seq = lp(cert_der)
+        signed_data = lp(digests_seq) + lp(certs_seq) + lp(b'')
+        signature = sign_fn(signed_data)
+        sigs_seq = lp(struct.pack('<I', SIG_ALG_RSA_PKCS1_SHA256) + lp(signature))
+        return lp(signed_data) + lp(sigs_seq) + lp(pub_der), signed_data
+
+    def make_block(content_digest, sign_fn):
+        signer, _ = build_signer(content_digest, sign_fn)
+        value = lp(lp(signer))  # sequence of length-prefixed signers
+        pair = struct.pack('<Q', 4 + len(value)) + struct.pack('<I', V2_BLOCK_ID) + value
+        size = len(pair) + 24
+        return struct.pack('<Q', size) + pair + struct.pack('<Q', size) + APK_SIG_MAGIC
+
+    def sign_with_key(data):
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, 'signed')
+            with open(p, 'wb') as f:
+                f.write(data)
+            return _openssl_bytes(['openssl', 'dgst', '-sha256', '-sign', key, p])
+
+    # The EOCD bytes change with the new CD offset, so compute with the final offset.
+    block_len = len(make_block(dummy_digest, lambda d: b'\x00' * 256))
+    new_eocd = bytearray(apk[eocd:])
+    struct.pack_into('<I', new_eocd, 16, cd_off + block_len)
+    digests = chunk_digests([sec_a, sec_b, bytes(new_eocd)])
+    top = hashlib.sha256(b'\x5a' + struct.pack('<I', len(digests)) + b''.join(digests)).digest()
+    block = make_block(top, sign_with_key)
+    assert len(block) == block_len, 'signing block size changed'
+    return sec_a + block + sec_b + bytes(new_eocd)
+
+
+# ---------------------------------------------------------------------------
 # Signing (JAR / v1 scheme with openssl)
 # ---------------------------------------------------------------------------
 def ensure_keys():
@@ -537,12 +617,15 @@ def main():
     out_path = os.path.join(RELEASE_DIR, APK_NAME)
     if os.path.exists(out_path):
         os.remove(out_path)
-    with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as z:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
         for name, content in entries:
             info = zipfile.ZipInfo(name, date_time=(2026, 11, 6, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             z.writestr(info, content)
+    with open(out_path, 'wb') as f:
+        f.write(add_v2_signature(buf.getvalue(), key, cert))
     sha = write_download_page(out_path)
     print('Wrote', out_path, os.path.getsize(out_path), 'bytes, sha256', sha)
 
