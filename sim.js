@@ -259,8 +259,7 @@
       if (stillValid) return true;
       food.reservedBy = null;
     }
-    return ants.some(other => other !== exclude && other.carrying && other.pickupSource === food &&
-      simTime - (other.pickupAt ?? -Infinity) < .001 && distance(other, food) < 18);
+    return ants.some(other => other !== exclude && other.carrying && other.foodSource === food && distance(other, food) < 18);
   }
 
   function foodApproach(ant) {
