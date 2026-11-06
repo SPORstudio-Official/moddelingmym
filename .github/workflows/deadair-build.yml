@@ -31,6 +31,10 @@ on:
         description: 'voice id'
         required: false
         default: 'default'
+      probe:
+        description: '1 = run the voice-stability probe instead of re-recording'
+        required: false
+        default: ''
   repository_dispatch:
     types: [record-voice]
 
@@ -67,6 +71,7 @@ jobs:
           DISPATCH_KEY: ${{ github.event.client_payload.openrouter_key }}${{ github.event.inputs.openrouter_key }}
           DISPATCH_MODEL: ${{ github.event.client_payload.model }}${{ github.event.inputs.model }}
           DISPATCH_VOICE: ${{ github.event.client_payload.voice }}${{ github.event.inputs.voice }}
+          DISPATCH_PROBE: ${{ github.event.client_payload.probe }}${{ github.event.inputs.probe }}
         run: |
           if [ ! -f .github/voice-request.txt ]; then
             echo "No .github/voice-request.txt - keeping the embedded tapes."
@@ -82,6 +87,11 @@ jobs:
           if [ -z "$KEYFOUND" ]; then
             echo "No API key in this run - keeping the embedded tapes (no status overwrite)."
             echo "did=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "${DISPATCH_PROBE:-}" = "1" ]; then
+            python3 -m pip install --quiet numpy imageio-ffmpeg
+            python3 tools/probe_voice.py
+            echo "did=1" >> "$GITHUB_OUTPUT"; exit 0
           fi
           MODEL=$(sed -n 's/^model=//p' .github/voice-request.txt | head -1)
           VOICE=$(sed -n 's/^voice=//p' .github/voice-request.txt | head -1)
@@ -99,6 +109,7 @@ jobs:
           git config user.name  "dead-air-ci"
           git config user.email "ci@users.noreply.github.com"
           git add -A assets/audio src/audio_data.h
+          git add -A demo/probe_*.wav 2>/dev/null || true
           rm -f assets/audio/_voice_status.txt.tmp
           if git diff --cached --quiet; then
             echo "nothing to commit"
