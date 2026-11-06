@@ -1,6 +1,2 @@
-17:03:28  env vars with a value: DISPATCH_KEY
-17:03:28  using DISPATCH_KEY (len 73); model=fish-audio/s2.1-pro-free:free voice=default
-17:03:30  models: 417 total, 47 audio/fish candidates: stealth/crouton-alpha, meta/muse-spark-open, google/gemini-4-argon, google/gemini-4-argon:batch, meta/muse-wonder, perceptron/perceptron-mk1.5, xiaomi/mimo-v2.6-pro-ultraspeed, xiaomi/mimo-v2.6-flash, xiaomi/mimo-v2.6-pro, qwen/qwen3.8-omni-flash, google/gemini-3.8-flash, google/gemini-3.8-flash:batch, google/gemini-3.7-flash, google/gemini-3.7-flash:batch, thinkingmachines/inkling-small, google/gemini-3.6-flash, google/gemini-3.6-flash:batch, google/gemini-3.5-flash-lite, google/gemini-3.5-flash-lite:batch, thinkingmachines/inkling, google/gemini-3.5-flash, google/gemini-3.5-flash:batch, google/gemini-3.1-flash-lite, google/gemini-3.1-flash-lite:batch, nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
-17:03:31  A speech model=fish-audio/s2.1-pro-free:free voice=default fmt=mp3 -> 400 application/json {"error":{"message":"Provider returned 400","code":400}}
-17:03:42  A speech model=fish-audio/s2.1-pro-free:free voice=None fmt=mp3 -> 200 audio/mpeg 
-17:03:42  FAILED to decode tape1: no wav returned (audio/mpeg) and ffmpeg unavailable
+17:06:24  env vars with a value: NONE
+17:06:24  no API key found -> cannot record
