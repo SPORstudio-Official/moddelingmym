@@ -88,33 +88,33 @@ SCRIPT = {
 # accepts). `shift` is a resample ratio: it moves pitch AND formants together,
 # which is what actually changes the apparent person. `eq` adds the room.
 SPEAKERS = {
-    # 911 dispatcher: dry, procedural, narrow telephone band
-    "operator": {"voice": "alloy", "shift": 1.00,
+    # 911 dispatcher: deep, unhurried, dry telephone band
+    "operator": {"voice": "alloy", "shift": 0.90, "tempo": 0.98,
                  "eq": "highpass=f=300,lowpass=f=3400,acompressor=threshold=0.10:ratio=4:attack=4:release=140"},
-    # the caller: higher, panicked, close to the mic
-    "caller": {"voice": "", "shift": 1.18,
-               "eq": "highpass=f=300,lowpass=f=3200,acompressor=threshold=0.07:ratio=6:attack=2:release=90"},
-    # the priest: low, slow, churchy tail
-    "priest": {"voice": "alloy", "shift": 0.90,
-               "eq": "highpass=f=80,lowpass=f=7000,aecho=0.7:0.5:45:0.20"},
-    # the altar boy: young, thin, standing too close to the recorder
-    "boy": {"voice": "", "shift": 1.12,
-            "eq": "highpass=f=120,lowpass=f=6500,aecho=0.6:0.4:28:0.12"},
-    # submarine commander: clipped radio voice
-    "officer": {"voice": "alloy", "shift": 0.95,
+    # the caller: much higher, fast, breathing into the mic
+    "caller": {"voice": "", "shift": 1.26, "tempo": 1.06,
+               "eq": "highpass=f=320,lowpass=f=3200,acompressor=threshold=0.06:ratio=7:attack=2:release=80"},
+    # the priest: very low and slow, church tail
+    "priest": {"voice": "alloy", "shift": 0.82, "tempo": 0.92,
+               "eq": "highpass=f=80,lowpass=f=6800,aecho=0.75:0.5:55:0.22"},
+    # the altar boy: young, thin, too close to the machine
+    "boy": {"voice": "", "shift": 1.22, "tempo": 1.02,
+            "eq": "highpass=f=140,lowpass=f=6200,aecho=0.6:0.4:28:0.12"},
+    # submarine commander: clipped, level, radio
+    "officer": {"voice": "alloy", "shift": 0.92, "tempo": 1.00,
                 "eq": "highpass=f=380,lowpass=f=3000,acompressor=threshold=0.09:ratio=8:attack=3:release=70"},
-    # sonar sailor: whispering, terrified, same radio
-    "sailor": {"voice": "", "shift": 1.06,
+    # sonar sailor: higher, quick, frightened
+    "sailor": {"voice": "", "shift": 1.12, "tempo": 1.05,
                "eq": "highpass=f=350,lowpass=f=3100,acompressor=threshold=0.08:ratio=7:attack=2:release=60"},
-    # YOU. the archivist: his own voice on tape 4, and the future tape 5
-    "archivist": {"voice": "", "shift": 0.944,
-                  "eq": "highpass=f=90,lowpass=f=8000,aecho=0.4:0.3:10:0.07"},
-    # the interviewer: flat, cold, no echo at all
-    "interrogator": {"voice": "alloy", "shift": 0.86,
-                     "eq": "highpass=f=95,lowpass=f=7200"},
-    # the thing on the line
-    "entity": {"voice": "alloy", "shift": 0.74,
-               "eq": "highpass=f=55,lowpass=f=3600,aecho=0.8:0.7:130:0.45"},
+    # YOU. the archivist: untouched, this is the voice the game gives you
+    "archivist": {"voice": "", "shift": 1.00, "tempo": 1.00,
+                  "eq": "highpass=f=90,lowpass=f=8000,aecho=0.35:0.3:9:0.06"},
+    # the interviewer: low, flat, no room at all
+    "interrogator": {"voice": "alloy", "shift": 0.84, "tempo": 0.97,
+                     "eq": "highpass=f=95,lowpass=f=7400"},
+    # the thing on the line: far below the body, stretched
+    "entity": {"voice": "alloy", "shift": 0.68, "tempo": 0.90,
+               "eq": "highpass=f=50,lowpass=f=3400,aecho=0.85:0.7:150:0.45"},
 }
 
 # kept for the probe scripts
@@ -279,7 +279,7 @@ def normalize(path, peak=0.92):
     out.close()
 
 
-def colour(path, shift, chain):
+def colour(path, shift, chain, tempo=1.0):
     """Re-voice a take: resample pitch shift (moves formants too - this is what
     makes it read as a different person) with the duration put back by atempo,
     then the speaker's room/EQ chain."""
@@ -287,7 +287,8 @@ def colour(path, shift, chain):
     if not ff:
         return path
     tmp = path + ".col.wav"
-    filt = "asetrate=%d,aresample=44100,atempo=%.6f" % (int(44100 * shift), 1.0 / shift)
+    jitter = 1.0 / shift * tempo
+    filt = "asetrate=%d,aresample=44100,atempo=%.6f" % (int(44100 * shift), jitter)
     if chain:
         filt += "," + chain
     subprocess.check_call([ff, "-y", "-loglevel", "error", "-i", path,
@@ -396,7 +397,7 @@ def main():
                 seg = os.path.join(tmpdir, "%s_%02d_%s.wav" % (name, idx, speaker))
                 try:
                     to_wav(data, ctype, seg, fmt)
-                    colour(seg, cfg["shift"], cfg["eq"])
+                    colour(seg, cfg["shift"], cfg["eq"], cfg.get("tempo", 1.0))
                 except Exception as e:                          # noqa: BLE001
                     log("FAILED to decode %s line %d: %s" % (name, idx + 1, e))
                     failed = True
