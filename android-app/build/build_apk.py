@@ -536,7 +536,7 @@ def sign_entries(entries, key, cert):
         with open(sf_path, 'wb') as f:
             f.write(sf_bytes)
         subprocess.check_call([
-            'openssl', 'smime', '-sign', '-binary', '-noattr', '-md', 'sha256',
+            'openssl', 'smime', '-sign', '-binary', '-md', 'sha256',
             '-in', sf_path, '-signer', cert, '-inkey', key,
             '-outform', 'DER', '-out', rsa_path,
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -600,9 +600,16 @@ def main():
         sys.exit('Missing assets directory: ' + ASSETS_DIR)
     os.makedirs(RELEASE_DIR, exist_ok=True)
 
+    prebuilt_dex = os.path.join(HERE, 'classes.dex')
+    if os.path.exists(prebuilt_dex):
+        # Preferred: DEX assembled by smali from ../smali/ (see README).
+        with open(prebuilt_dex, 'rb') as f:
+            dex = f.read()
+    else:
+        dex = build_dex()
     entries = [
         ('AndroidManifest.xml', build_manifest()),
-        ('classes.dex', build_dex()),
+        ('classes.dex', dex),
     ]
     for root, _, files in os.walk(ASSETS_DIR):
         for fn in sorted(files):

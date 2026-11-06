@@ -1,0 +1,10 @@
+version: 2.4.1
+apkFileName: CodeReviewer.apk
+isFrameworkApk: false
+usesFramework: null
+sdkInfo:
+  minSdkVersion: '21'
+  targetSdkVersion: '30'
+packageInfo:
+  forcedPackageId: '127'
+doNotCompress: []

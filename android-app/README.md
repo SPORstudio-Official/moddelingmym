@@ -19,6 +19,9 @@ android-app/
   app/src/main/assets/analyzer.js   rule engine (plain JS, also runs in Node for tests)
   app/src/main/assets/index.html    UI rendered inside the app's WebView
   tests/analyzer.test.js            unit tests for the rules
+  smali/                            Dalvik source for the single Activity
+  build/classes.dex                 classes.dex assembled from smali/ (smali 2.3.4 via apktool 2.4.1)
+  build/dex-project/                minimal apktool project used only to run the smali assembler
   build/build_apk.py                builds + signs the APK (no Android SDK needed)
   release/CodeReviewer.apk          built app
   release/index.html                download page that starts the APK download automatically
@@ -36,11 +39,27 @@ node --test android-app/tests/analyzer.test.js
 python3 android-app/build/build_apk.py
 ```
 
-The build script writes the binary manifest, generates `classes.dex` (one Activity hosting
-a WebView that loads `assets/index.html`), packages the web assets, and signs the APK with a
-JAR (v1) signature for `minSdkVersion` 21. The signing key is created in `android-app/signing/`
-on first build and is git-ignored. Builds made with a new key cannot update an installed
-build signed with an older key; uninstall first in that case.
+The build script writes the binary manifest, uses `build/classes.dex` (one Activity hosting a
+WebView that loads `assets/index.html`), packages the web assets, and signs the APK with both a
+JAR (v1) signature, for Android 5-6, and an APK Signature Scheme v2 block, for Android 7+.
+The signing key is created in `android-app/signing/` on first build and is git-ignored. Builds
+made with a new key cannot update an installed build signed with an older key; uninstall first.
+
+### Regenerating classes.dex
+
+`smali/` is the source. To assemble it, copy it into the dex project and run apktool's smali
+assembler (apktool's later resource step fails in this setup, which is expected; the dex is
+written before that step):
+
+```
+cp -r android-app/smali android-app/build/dex-project/
+java -jar apktool_2.4.1.jar b android-app/build/dex-project
+cp android-app/build/dex-project/build/apk/classes.dex android-app/build/classes.dex
+```
+
+`apktool_2.4.1.jar` is available from the npm package `apktool-jar`. It is not committed because
+it is 17 MB. If `build/classes.dex` is missing, the build script falls back to a generator that
+writes equivalent DEX directly.
 
 ## Install
 
