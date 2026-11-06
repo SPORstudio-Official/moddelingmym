@@ -720,7 +720,7 @@ static void draw_transcript(FB *fb, int x, int y, int maxchars, int scale) {
             if (blank_i < G.filled) {
                 disp = G.chosen[blank_i];
                 col = rgb_(190, 255, 200);
-            } else if (G.clarity > 0.55f) {
+            } else if (G.clarity > 0.55f && ln->answers[blank_i]) {
                 disp = ln->answers[blank_i];
                 col = rgb_(72, 132, 84);
             } else {
@@ -750,8 +750,19 @@ static void render_title(FB *fb) {
     fb_shade(fb, 0, 0, fb->w, fb->h, 0.45f);
 
     int jitter = (int)(sinf(G.t * 7.0f) * 1.2f);
-    txt_draw_shadow(fb, fb->w / 2 - txt_w("DEAD AIR", 5) / 2 + jitter, 214,
-                    "DEAD AIR", rgb_(232, 230, 214), 5);
+    float flick = 1.0f;
+    if (fmodf(G.t, 3.7f) < 0.22f) flick = 0.72f;
+    if (fmodf(G.t, 11.3f) < 0.08f) flick = 0.55f;
+    {
+        u32 tc = argb((int)(255 * flick), 232, 230, 214);
+        txt_draw_shadow(fb, fb->w / 2 - txt_w("DEAD AIR", 5) / 2 + jitter, 214,
+                        "DEAD AIR", tc, 5);
+        if (flick < 0.9f) {
+            int dx = (int)(sinf(G.t * 33.0f) * 3.0f);
+            txt_draw(fb, fb->w / 2 - txt_w("DEAD AIR", 5) / 2 + jitter + dx + 2, 214,
+                     "DEAD AIR", argb(40, 120, 220, 200), 5);
+        }
+    }
     txt_center(fb, fb->w / 2, 262, "AN AUDITORY HAUNTING  /  1996",
                argb(200, 205, 175, 120), 1);
 
@@ -767,6 +778,7 @@ static void render_title(FB *fb) {
             txt_draw(fb, fb->w / 2 - w / 2 - 12, y, ">", rgb_(230, 190, 110), 1);
     }
     txt_center(fb, fb->w / 2, 344, "MOUSE + SPACE", argb(120, 160, 160, 150), 1);
+    txt_draw(fb, 6, 348, "V1.0  SPOR STUDIO", argb(70, 120, 120, 110), 1);
     screen_fx(fb);
 }
 

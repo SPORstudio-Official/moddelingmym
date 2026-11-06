@@ -106,3 +106,19 @@ tools/              asset generators + test scripts
 
 Audio assets were recorded with licensed TTS and embedded as raw PCM; the game
 does no file I/O at runtime.
+
+### Changing the voice
+
+The tapes were recorded with a local TTS voice. To re-record them with another
+model (for example `fish-audio/s2.1-pro-free:free` on OpenRouter), run this on a
+machine with normal internet access:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+python3 tools/regen_voice_openrouter.py --model fish-audio/s2.1-pro-free:free --voice default
+./scripts/build_windows.sh
+```
+
+The script rewrites `assets/audio/*.wav`, regenerates `src/audio_data.h` and
+leaves you a fresh `build/DEAD_AIR.exe`. The key is read from the environment and
+is never written into the repository.
