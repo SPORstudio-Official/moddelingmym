@@ -77,7 +77,8 @@ jobs:
           MODEL=${MODEL:-${DISPATCH_MODEL:-fish-audio/s2.1-pro-free:free}}
           VOICE=${VOICE:-${DISPATCH_VOICE:-default}}
           echo "Re-recording with model=$MODEL voice=$VOICE"
-          python3 -m pip install --quiet numpy
+          python3 -m pip install --quiet numpy imageio-ffmpeg
+          python3 -m pip install --quiet imageio-ffmpeg || sudo apt-get install -y -qq ffmpeg
           python3 tools/regen_voice_openrouter.py --model "$MODEL" --voice "$VOICE"
           echo "did=1" >> "$GITHUB_OUTPUT"
 

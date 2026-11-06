@@ -132,7 +132,7 @@ def try_speech_endpoint(model, voice, text, key):
     # This endpoint only accepts response_format mp3 | pcm.
     for m in (model, model.split(":")[0]):
         for fmt in ("mp3", "pcm"):
-            for v in (voice, None):
+            for v in ((voice, None) if voice else (None,)):
                 body = {"model": m, "input": text, "response_format": fmt}
                 if v:
                     body["voice"] = v
@@ -174,6 +174,19 @@ def try_chat_endpoint(model, voice, text, key):
     return None, None
 
 
+def ffmpeg_path():
+    """System ffmpeg, else the static binary bundled with imageio-ffmpeg."""
+    ff = shutil.which("ffmpeg")
+    if ff:
+        return ff
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as e:                                     # noqa: BLE001
+        log("no ffmpeg (%s)" % e)
+        return None
+
+
 def pcm_to_wav(data, out_wav, sr=44100):
     """Wrap raw signed 16-bit little-endian mono PCM in a RIFF header."""
     if len(data) % 2:
@@ -194,7 +207,7 @@ def to_wav(data, ctype, out_wav, fmt=None, sr=44100):
     if fmt == "pcm" and not looks_mp3:
         pcm_to_wav(data, out_wav, sr)
         return
-    ff = shutil.which("ffmpeg")
+    ff = ffmpeg_path()
     if not ff:
         if fmt == "pcm":
             pcm_to_wav(data, out_wav, sr)
@@ -268,6 +281,11 @@ def main():
             "readable by anyone. Move it to a secret and rotate it.")
 
     dump_models(key)
+
+    if args.voice and args.voice.strip().lower() in ("default", "auto", "none"):
+        args.voice = ""            # fish rejects "default"; omitting the field uses the model voice
+    if args.voice:
+        log("requested voice=%s" % args.voice)
 
     only = [s.strip() for s in args.only.split(",") if s.strip()]
     ok = 0
