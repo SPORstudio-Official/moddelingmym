@@ -69,8 +69,10 @@ machine you switch on costs you signal quality.
 4. **TAPE 04** — a police interview whose subject has your voice, recorded tomorrow.
 5. **TAPE 05** — an unlabelled tape recording your apartment ten seconds into the future. Read the live feed and arm the room it names before impact.
 
-All five tapes are voiced. Everything else — the rain, the hums, the creaks, the
-drone, the thing in the closet — is synthesised at runtime.
+All five tapes and the thing on the line are voiced by
+**`fish-audio/s2.1-pro-free`** through OpenRouter, recorded by CI and embedded as
+raw PCM. Everything else — the rain, the hums, the creaks, the drone, the thing in
+the closet — is synthesised at runtime.
 
 ---
 
@@ -114,13 +116,15 @@ does no file I/O at runtime.
 
 ### Changing the voice
 
-The tapes were recorded with a local TTS voice. To re-record them with another
-model (for example `fish-audio/s2.1-pro-free:free` on OpenRouter), run this on a
-machine with normal internet access:
+The current tapes were recorded with OpenRouter's
+`fish-audio/s2.1-pro-free:free` (voice = model default; the endpoint rejects the
+literal id `default`, so leave `voice=` empty to get the model's own voice). To
+re-record them, run this on a machine with normal internet access:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...
-python3 tools/regen_voice_openrouter.py --model fish-audio/s2.1-pro-free:free --voice default
+python3 -m pip install numpy imageio-ffmpeg     # imageio-ffmpeg supplies a static ffmpeg
+python3 tools/regen_voice_openrouter.py --model fish-audio/s2.1-pro-free:free --voice ""
 ./scripts/build_windows.sh
 ```
 
@@ -135,7 +139,17 @@ The same thing runs in CI, which is the only path out of a locked-down environme
    variables -> Actions -> New repository secret).
 2. `.github/voice-request.txt` already asks for `fish-audio/s2.1-pro-free:free`;
    edit `model=` / `voice=` there to change it.
-3. Trigger the workflow (any push, or *Run workflow* in the Actions tab).
+3. Trigger the workflow (any push, or *Run workflow* in the Actions tab). To pass
+   a key without storing it at all, dispatch with it in the payload:
+
+```bash
+gh api -X POST repos/SPORstudio-Official/moddelingmym/actions/workflows/deadair-build.yml/dispatches \
+  -f ref=arena/96c135af-moddelingmym \
+  -f inputs[openrouter_key]=sk-or-... \
+  -f inputs[model]=fish-audio/s2.1-pro-free:free -f inputs[voice]=default
+```
+
+   Runs with no key at all are skipped cleanly and keep the embedded tapes.
 
 The job re-records the tapes, commits them back to the branch, rebuilds the exe
 and replaces the release asset.

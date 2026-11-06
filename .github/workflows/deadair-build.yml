@@ -72,6 +72,17 @@ jobs:
             echo "No .github/voice-request.txt - keeping the embedded tapes."
             echo "did=0" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          KEYFOUND=""
+          for v in DISPATCH_KEY OPENROUTER_API_KEY OPENROUTER_KEY OPENROUTER_TOKEN \
+                   OR_API_KEY OPENROUTER_API FISH_API_KEY OPENROUTER OPENROUTERAPIKEY \
+                   OPEN_ROUTER_KEY API_KEY SK_OR_KEY VAR_OPENROUTER_API_KEY VAR_OPENROUTER_KEY; do
+            eval "val=\$$v"
+            if [ -n "$val" ]; then KEYFOUND=1; break; fi
+          done
+          if [ -z "$KEYFOUND" ]; then
+            echo "No API key in this run - keeping the embedded tapes (no status overwrite)."
+            echo "did=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           MODEL=$(sed -n 's/^model=//p' .github/voice-request.txt | head -1)
           VOICE=$(sed -n 's/^voice=//p' .github/voice-request.txt | head -1)
           MODEL=${MODEL:-${DISPATCH_MODEL:-fish-audio/s2.1-pro-free:free}}
@@ -83,7 +94,7 @@ jobs:
           echo "did=1" >> "$GITHUB_OUTPUT"
 
       - name: Commit re-recorded audio and diagnostics
-        if: always()
+        if: always() && steps.voice.outputs.did == '1'
         run: |
           git config user.name  "dead-air-ci"
           git config user.email "ci@users.noreply.github.com"
