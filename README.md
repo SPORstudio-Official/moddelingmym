@@ -19,9 +19,10 @@ This is a portable 64-bit Windows desktop app. Download the single `.exe` and ru
 
 ## A smarter colony
 
-- **Scouts** explore fresh ground; **foragers** exploit remembered sources.
+- **Scouts** choose less-visited regions from a shared exploration-memory map; **foragers** exploit remembered sources and follow useful pheromone trails.
 - A shared colony memory lets workers direct one another toward discovered food. Foragers rank sources by distance, remaining yield, learned quality, and crowding, then periodically reconsider assignments. Workers get distinct staging points around each pile, with one reserved picker at a time, to reduce jams.
 - Returning workers lay **food pheromone**. Stronger, successful routes persist longer and guide other workers; scent fades over time.
+- Workers run weighted **A*** searches over the field, planning waypoints around rock geometry, worker traffic, and useful scent trails; routes re-plan after terrain changes.
 - Each worker also uses a shared online, tabular **Q-learning** policy: 64 states combine goal bearing, nearby obstacles/crowding, and carry intent; eight compass actions are scored. Progress is rewarded, collisions penalized, and successful food collection and delivery reinforce decisions.
 - The queen grows the workforce when the nest has enough stored food. Scouts, foragers, food stores, deliveries, and live policy values are visible in the interface.
 
