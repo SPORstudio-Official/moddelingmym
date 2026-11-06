@@ -1,0 +1,57 @@
+name: Build Wonderworks for Windows
+
+on:
+  push:
+    branches:
+      - main
+      - 'arena/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  portable-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Review app JavaScript
+        run: npm run check
+
+      - name: Smoke test the creative round and Idea Vault
+        run: npm test
+
+      - name: Build portable 64-bit Windows app
+        run: npm run dist:win
+
+      - name: Verify standalone executable
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'release/Wonderworks.exe')) { throw 'Wonderworks.exe was not produced.' }
+          $file = Get-Item 'release/Wonderworks.exe'
+          Write-Host "Built $($file.Name) ($($file.Length) bytes)"
+
+      - name: Publish portable executable
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: wonderworks-latest
+          name: Wonderworks — Latest
+          body: |
+            Download **Wonderworks.exe**, a portable 64-bit desktop creativity arcade.
+            No installer, account, or internet connection is needed to play.
+          files: release/Wonderworks.exe
+          overwrite_files: true
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          make_latest: true

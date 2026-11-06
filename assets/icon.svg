@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="base" x1="16" y1="12" x2="242" y2="245" gradientUnits="userSpaceOnUse"><stop stop-color="#28353d"/><stop offset="1" stop-color="#151c23"/></linearGradient>
+    <linearGradient id="flower" x1="79" y1="54" x2="191" y2="196" gradientUnits="userSpaceOnUse"><stop stop-color="#ffc36e"/><stop offset=".48" stop-color="#ff7966"/><stop offset="1" stop-color="#b392f0"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="62" fill="url(#base)"/>
+  <circle cx="128" cy="128" r="93" fill="#fff" fill-opacity=".035"/>
+  <path d="M128 47c18 33 34 50 66 60-32 10-48 27-66 60-18-33-34-50-66-60 32-10 48-27 66-60Z" fill="url(#flower)"/>
+  <path d="M128 78c12 23 25 36 48 48-23 12-36 25-48 48-12-23-25-36-48-48 23-12 36-25 48-48Z" fill="#fff6db"/>
+  <path d="M128 101c7 13 14 20 27 27-13 7-20 14-27 27-7-13-14-20-27-27 13-7 20-14 27-27Z" fill="#ff715b"/>
+  <circle cx="198" cy="72" r="8" fill="#83d6b1"/>
+  <path d="m67 177 4 11 11 4-11 4-4 11-4-11-11-4 11-4 4-11Z" fill="#f3c458"/>
+</svg>
