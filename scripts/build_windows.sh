@@ -22,6 +22,7 @@ echo "[1/3] compiling resources"
 echo "[2/3] compiling + linking"
 "$ZIG" cc -target x86_64-windows-gnu -O2 -std=c99 \
     -Wl,--subsystem,windows \
+    -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va \
     -o build/DEAD_AIR.exe \
     src/main_win32.c src/game.c src/draw.c src/dsp.c src/content.c src/face.c \
     build/deadair.res \

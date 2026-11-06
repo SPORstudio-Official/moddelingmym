@@ -1,10 +1,14 @@
 #include <windows.h>
 
+/* Manifest: asInvoker, DPI-aware, Win7..Win11. Engines that flag
+   manifest-less PE files calm down once this is present. */
+1 RT_MANIFEST "src/deadair.manifest"
+
 1 ICON "assets/deadair.ico"
 
 1 VERSIONINFO
-FILEVERSION     1,0,0,0
-PRODUCTVERSION  1,0,0,0
+FILEVERSION     1,0,1,0
+PRODUCTVERSION  1,0,1,0
 FILEOS          0x40004L
 FILETYPE        0x1L
 BEGIN
@@ -14,11 +18,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "SPOR Studio"
             VALUE "FileDescription",  "DEAD AIR - an auditory haunting"
-            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "FileVersion",      "1.0.1.0"
             VALUE "InternalName",     "deadair"
             VALUE "OriginalFilename", "DEAD AIR.exe"
             VALUE "ProductName",      "DEAD AIR"
-            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "ProductVersion",   "1.0.1.0"
         END
     END
     BLOCK "VarFileInfo"

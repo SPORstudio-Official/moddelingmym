@@ -24,6 +24,48 @@ push that touches the game sources.
 * It is unsigned, so Windows SmartScreen may show *"Windows protected your PC"* → **More info → Run anyway**.
 * Headphones are strongly recommended. Sound is the game.
 
+### If your antivirus calls it a threat
+
+It is a **false positive**, and an unsigned, freshly-built 3.9 MB binary is the
+classic shape of one. What the executable actually does, in full:
+
+| | |
+|---|---|
+| Imports | `WINMM.dll`, `GDI32.dll`, `USER32.dll`, the UCRT — nothing else |
+| Network | none. No Winsock, no WinHTTP, no URLDownloadToFile |
+| Files | none. It never calls `CreateFile`; there is no save file, no config, no temp data |
+| Processes | none. No `CreateProcess`, `WinExec`, `ShellExecute`, `LoadLibrary` |
+| Registry | none |
+| Audio | `waveOut*` only, samples are compiled into the binary |
+
+Version 1.0.1 embeds a proper application manifest (`asInvoker`, DPI-aware,
+Win7–Win11 supportedOS), version metadata and `DYNAMICBASE` / `NX_COMPAT` /
+`HIGH_ENTROPY_VA` linker flags, which is what most heuristic engines expect to
+see. That removes some hits, but only a signature removes the rest — there is no
+code-signing certificate on this project yet.
+
+To confirm the file you have is the file CI built:
+
+```powershell
+certutil -hashfile DEAD_AIR.exe SHA256
+# compare against the published DEAD_AIR.exe.sha256
+```
+
+Then, if a scanner still objects, report it as a false positive and it clears for
+everyone in a day or two:
+
+* Microsoft Defender / SmartScreen — <https://www.microsoft.com/en-us/wdsi/filesubmission>
+* Kaspersky OpenTIP — <https://opentip.kaspersky.com/>
+* Avast / AVG — <https://www.avast.com/false-positive-file-form.php>
+* Bitdefender — <https://www.bitdefender.com/consumer/support/answer/29358/>
+
+Or skip the binary entirely and build it yourself — it is one command and needs
+nothing but a Zig toolchain:
+
+```bash
+pip install ziglang && ./scripts/build_windows.sh   # writes build/DEAD_AIR.exe
+```
+
 ---
 
 ## How it plays
