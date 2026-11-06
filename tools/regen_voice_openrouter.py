@@ -129,17 +129,20 @@ def dump_models(key):
 
 
 def try_speech_endpoint(model, voice, text, key):
+    # This endpoint only accepts response_format mp3 | pcm.
     for m in (model, model.split(":")[0]):
-        for v in (voice, None):
-            body = {"model": m, "input": text, "response_format": "wav"}
-            if v:
-                body["voice"] = v
-            st, ct, data = request(API + "/audio/speech", key, body)
-            snippet = "" if st == 200 else data[:220].decode("utf-8", "replace").replace("\n", " ")
-            log("A speech model=%s voice=%s -> %s %s %s" % (m, v, st, ct, snippet))
-            if st == 200 and len(data) > 2000:
-                return data, ct
-    return None, None
+        for fmt in ("mp3", "pcm"):
+            for v in (voice, None):
+                body = {"model": m, "input": text, "response_format": fmt}
+                if v:
+                    body["voice"] = v
+                st, ct, data = request(API + "/audio/speech", key, body)
+                snippet = "" if st == 200 else data[:200].decode("utf-8", "replace").replace("\n", " ")
+                log("A speech model=%s voice=%s fmt=%s -> %s %s %s"
+                    % (m, v, fmt, st, ct, snippet))
+                if st == 200 and len(data) > 2000:
+                    return data, ct, fmt
+    return None, None, None
 
 
 def try_chat_endpoint(model, voice, text, key):
@@ -171,12 +174,31 @@ def try_chat_endpoint(model, voice, text, key):
     return None, None
 
 
-def to_wav(data, ctype, out_wav, sr=44100):
+def pcm_to_wav(data, out_wav, sr=44100):
+    """Wrap raw signed 16-bit little-endian mono PCM in a RIFF header."""
+    if len(data) % 2:
+        data = data[:-1]
+    out = wave.open(out_wav, "wb")
+    out.setnchannels(1)
+    out.setsampwidth(2)
+    out.setframerate(sr)
+    out.writeframes(data)
+    out.close()
+
+
+def to_wav(data, ctype, out_wav, fmt=None, sr=44100):
     if data[:4] == b"RIFF" or "wav" in (ctype or ""):
         open(out_wav, "wb").write(data)
         return
+    looks_mp3 = data[:3] == b"ID3" or (len(data) > 1 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0)
+    if fmt == "pcm" and not looks_mp3:
+        pcm_to_wav(data, out_wav, sr)
+        return
     ff = shutil.which("ffmpeg")
     if not ff:
+        if fmt == "pcm":
+            pcm_to_wav(data, out_wav, sr)
+            return
         raise RuntimeError("no wav returned (%s) and ffmpeg unavailable" % ctype)
     tmp = out_wav + ".src"
     open(tmp, "wb").write(data)
@@ -252,15 +274,16 @@ def main():
     for name, text in TAPES.items():
         if only and name not in only:
             continue
-        data, ctype = try_speech_endpoint(args.model, args.voice, text, key)
+        data, ctype, fmt = try_speech_endpoint(args.model, args.voice, text, key)
         if data is None:
             data, ctype = try_chat_endpoint(args.model, args.voice, text, key)
+            fmt = None
         if data is None:
             log("FAILED to synthesise %s" % name)
             break
         path = os.path.join(args.out, name + ".wav")
         try:
-            to_wav(data, ctype, path)
+            to_wav(data, ctype, path, fmt)
             normalize(path)
         except Exception as e:                                 # noqa: BLE001
             log("FAILED to decode %s: %s" % (name, e))
