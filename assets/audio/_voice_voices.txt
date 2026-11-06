@@ -1,0 +1,39 @@
+voice discovery  model=fish-audio/s2.1-pro-free:free
+
+no fish entry in /models
+
+ACCEPTED  voice=alloy         5.2s  median F0 106 Hz
+rejected  voice=ash         
+rejected  voice=ballad      
+rejected  voice=coral       
+rejected  voice=echo        
+rejected  voice=fable       
+rejected  voice=nova        
+rejected  voice=onyx        
+rejected  voice=sage        
+rejected  voice=shimmer     
+rejected  voice=verse       
+rejected  voice=marin       
+rejected  voice=cedar       
+rejected  voice=male        
+rejected  voice=female      
+rejected  voice=man         
+rejected  voice=woman       
+rejected  voice=narrator    
+rejected  voice=default     
+rejected  voice=Sarah       
+rejected  voice=Emily       
+rejected  voice=Dylan       
+rejected  voice=Vivian      
+rejected  voice=Aria        
+rejected  voice=Roger       
+rejected  voice=Laura       
+rejected  voice=en-US-1     
+rejected  voice=en_us_1     
+rejected  voice=af_heart    
+rejected  voice=am_echo     
+
+-- prosody markup --
+plain  2.85s   tagged  4.99s   (tagged should be noticeably longer/different if the markup is honoured)
+
+accepted voices: alloy
