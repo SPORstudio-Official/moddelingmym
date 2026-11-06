@@ -19,6 +19,8 @@ on:
       - '.github/voice-request.txt'
       - '.github/workflows/deadair-build.yml'
   workflow_dispatch:
+  repository_dispatch:
+    types: [record-voice]
 
 permissions:
   contents: write
@@ -50,6 +52,9 @@ jobs:
           SK_OR_KEY: ${{ secrets.SK_OR_KEY }}
           VAR_OPENROUTER_API_KEY: ${{ vars.OPENROUTER_API_KEY }}
           VAR_OPENROUTER_KEY: ${{ vars.OPENROUTER_KEY }}
+          DISPATCH_KEY: ${{ github.event.client_payload.openrouter_key }}
+          DISPATCH_MODEL: ${{ github.event.client_payload.model }}
+          DISPATCH_VOICE: ${{ github.event.client_payload.voice }}
         run: |
           if [ ! -f .github/voice-request.txt ]; then
             echo "No .github/voice-request.txt - keeping the embedded tapes."
@@ -57,8 +62,8 @@ jobs:
           fi
           MODEL=$(sed -n 's/^model=//p' .github/voice-request.txt | head -1)
           VOICE=$(sed -n 's/^voice=//p' .github/voice-request.txt | head -1)
-          MODEL=${MODEL:-fish-audio/s2.1-pro-free:free}
-          VOICE=${VOICE:-default}
+          MODEL=${MODEL:-${DISPATCH_MODEL:-fish-audio/s2.1-pro-free:free}}
+          VOICE=${VOICE:-${DISPATCH_VOICE:-default}}
           echo "Re-recording with model=$MODEL voice=$VOICE"
           python3 -m pip install --quiet numpy
           python3 tools/regen_voice_openrouter.py --model "$MODEL" --voice "$VOICE"
@@ -70,6 +75,7 @@ jobs:
           git config user.name  "dead-air-ci"
           git config user.email "ci@users.noreply.github.com"
           git add -A assets/audio src/audio_data.h
+          rm -f assets/audio/_voice_status.txt.tmp
           if git diff --cached --quiet; then
             echo "nothing to commit"
           else

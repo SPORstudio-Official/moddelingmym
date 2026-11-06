@@ -218,7 +218,7 @@ def main():
     for name in ("OPENROUTER_API_KEY", "OPENROUTER_KEY", "OPENROUTER_TOKEN",
                  "OR_API_KEY", "OPENROUTER_API", "FISH_API_KEY", "OPENROUTER",
                  "OPENROUTERAPIKEY", "OPEN_ROUTER_KEY", "API_KEY", "SK_OR_KEY",
-                 "VAR_OPENROUTER_API_KEY", "VAR_OPENROUTER_KEY"):
+                 "VAR_OPENROUTER_API_KEY", "VAR_OPENROUTER_KEY", "DISPATCH_KEY"):
         v = os.environ.get(name, "").strip()
         if v:
             key, key_src = v, v if False else name
@@ -233,7 +233,7 @@ def main():
     present = [n for n in ("OPENROUTER_API_KEY", "OPENROUTER_KEY", "OPENROUTER_TOKEN",
                            "OR_API_KEY", "OPENROUTER_API", "FISH_API_KEY", "OPENROUTER",
                            "OPENROUTERAPIKEY", "OPEN_ROUTER_KEY", "API_KEY", "SK_OR_KEY",
-                           "VAR_OPENROUTER_API_KEY", "VAR_OPENROUTER_KEY")
+                           "VAR_OPENROUTER_API_KEY", "VAR_OPENROUTER_KEY", "DISPATCH_KEY")
                if os.environ.get(n, "").strip()]
     log("env vars with a value: %s" % (", ".join(present) or "NONE"))
     if not key:
