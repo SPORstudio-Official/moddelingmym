@@ -43,6 +43,13 @@ jobs:
           OR_API_KEY: ${{ secrets.OR_API_KEY }}
           OPENROUTER_API: ${{ secrets.OPENROUTER_API }}
           FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
+          OPENROUTER: ${{ secrets.OPENROUTER }}
+          OPENROUTERAPIKEY: ${{ secrets.OPENROUTERAPIKEY }}
+          OPEN_ROUTER_KEY: ${{ secrets.OPEN_ROUTER_KEY }}
+          API_KEY: ${{ secrets.API_KEY }}
+          SK_OR_KEY: ${{ secrets.SK_OR_KEY }}
+          VAR_OPENROUTER_API_KEY: ${{ vars.OPENROUTER_API_KEY }}
+          VAR_OPENROUTER_KEY: ${{ vars.OPENROUTER_KEY }}
         run: |
           if [ ! -f .github/voice-request.txt ]; then
             echo "No .github/voice-request.txt - keeping the embedded tapes."

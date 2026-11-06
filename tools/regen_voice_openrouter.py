@@ -216,7 +216,9 @@ def main():
     key = ""
     key_src = ""
     for name in ("OPENROUTER_API_KEY", "OPENROUTER_KEY", "OPENROUTER_TOKEN",
-                 "OR_API_KEY", "OPENROUTER_API", "FISH_API_KEY"):
+                 "OR_API_KEY", "OPENROUTER_API", "FISH_API_KEY", "OPENROUTER",
+                 "OPENROUTERAPIKEY", "OPEN_ROUTER_KEY", "API_KEY", "SK_OR_KEY",
+                 "VAR_OPENROUTER_API_KEY", "VAR_OPENROUTER_KEY"):
         v = os.environ.get(name, "").strip()
         if v:
             key, key_src = v, v if False else name
@@ -229,7 +231,9 @@ def main():
         sys.exit(code)
 
     present = [n for n in ("OPENROUTER_API_KEY", "OPENROUTER_KEY", "OPENROUTER_TOKEN",
-                           "OR_API_KEY", "OPENROUTER_API", "FISH_API_KEY")
+                           "OR_API_KEY", "OPENROUTER_API", "FISH_API_KEY", "OPENROUTER",
+                           "OPENROUTERAPIKEY", "OPEN_ROUTER_KEY", "API_KEY", "SK_OR_KEY",
+                           "VAR_OPENROUTER_API_KEY", "VAR_OPENROUTER_KEY")
                if os.environ.get(n, "").strip()]
     log("env vars with a value: %s" % (", ".join(present) or "NONE"))
     if not key:
@@ -237,6 +241,9 @@ def main():
         finish(1)
     log("using %s (len %d); model=%s voice=%s"
         % (key_src, len(key), args.model, args.voice))
+    if key_src.startswith("VAR_"):
+        log("WARNING: the key came from a plain repository *variable*, i.e. it is "
+            "readable by anyone. Move it to a secret and rotate it.")
 
     dump_models(key)
 
