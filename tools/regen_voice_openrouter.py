@@ -213,7 +213,14 @@ def main():
     ap.add_argument("--out", default="assets/audio")
     args = ap.parse_args()
 
-    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    key = ""
+    key_src = ""
+    for name in ("OPENROUTER_API_KEY", "OPENROUTER_KEY", "OPENROUTER_TOKEN",
+                 "OR_API_KEY", "OPENROUTER_API", "FISH_API_KEY"):
+        v = os.environ.get(name, "").strip()
+        if v:
+            key, key_src = v, v if False else name
+            break
     os.makedirs(args.out, exist_ok=True)
     status_path = os.path.join(args.out, "_voice_status.txt")
 
@@ -221,10 +228,15 @@ def main():
         open(status_path, "w").write("\n".join(LOG) + "\n")
         sys.exit(code)
 
+    present = [n for n in ("OPENROUTER_API_KEY", "OPENROUTER_KEY", "OPENROUTER_TOKEN",
+                           "OR_API_KEY", "OPENROUTER_API", "FISH_API_KEY")
+               if os.environ.get(n, "").strip()]
+    log("env vars with a value: %s" % (", ".join(present) or "NONE"))
     if not key:
-        log("OPENROUTER_API_KEY is not set")
+        log("no API key found -> cannot record")
         finish(1)
-    log("model=%s voice=%s key=%s..." % (args.model, args.voice, key[:8]))
+    log("using %s (len %d); model=%s voice=%s"
+        % (key_src, len(key), args.model, args.voice))
 
     dump_models(key)
 

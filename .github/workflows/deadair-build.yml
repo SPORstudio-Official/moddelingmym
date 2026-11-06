@@ -37,12 +37,13 @@ jobs:
         id: voice
         continue-on-error: true
         env:
-          ORKEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
+          OPENROUTER_TOKEN: ${{ secrets.OPENROUTER_TOKEN }}
+          OR_API_KEY: ${{ secrets.OR_API_KEY }}
+          OPENROUTER_API: ${{ secrets.OPENROUTER_API }}
+          FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
         run: |
-          if [ -z "$ORKEY" ]; then
-            echo "OPENROUTER_API_KEY secret not set - keeping the embedded tapes."
-            echo "did=0" >> "$GITHUB_OUTPUT"; exit 0
-          fi
           if [ ! -f .github/voice-request.txt ]; then
             echo "No .github/voice-request.txt - keeping the embedded tapes."
             echo "did=0" >> "$GITHUB_OUTPUT"; exit 0
