@@ -72,14 +72,14 @@
         <aside class="insights-column">
           <article class="panel brain-panel">
             <div class="panel-heading"><div><span class="section-kicker">THE COLONY BRAIN</span><h2>Learning in motion<span class="green-period">.</span></h2></div><span class="brain-orb"><span>⌘</span></span></div>
-            <p class="panel-copy">Scouts map less-visited ground. Foragers remember rich sources, reserve pickup slots, and plan around rocks and traffic with weighted A* plus learned Q-values.</p>
+            <p class="panel-copy">Scouts chart novel ground; foragers remember valuable sources. The colony shifts toward gathering when stores run low, while workers plan around rocks and traffic.</p>
             <div class="learning-graphic">
               <div class="learning-line"><span>POLICY</span><span class="policy-label"><i></i> A* + Q-LEARNING</span></div>
               <div class="q-grid" id="qGrid" aria-label="Live learned movement policy"></div>
               <div class="q-axes"><span>STATE →</span><span>ACTION →</span></div>
             </div>
             <div class="brain-facts"><div><span class="fact-key">STATES</span><strong>64</strong><small>bearing × terrain × intent</small></div><div><span class="fact-key">ACTIONS</span><strong>8</strong><small>compass directions</small></div></div>
-            <div class="learning-note"><span class="learning-spark">✳</span><span><b>It learns locally.</b> Food quality, crowding, scent trails, and obstacle feedback shape the colony's next choice.</span></div>
+            <div class="learning-note"><span class="learning-spark">✳</span><span><b>Shared world model.</b> <span id="memorySummary">Scouts build a map; each worker keeps its own experience.</span></span></div>
           </article>
 
           <article class="panel activity-panel">
@@ -87,7 +87,7 @@
             <div class="chart-wrap"><canvas id="chart" aria-label="Chart of food deliveries over time"></canvas><div class="chart-overlay" id="chartEmpty">Food deliveries will<br>appear here</div></div>
             <div class="chart-legend"><span><i></i> DELIVERIES / MIN</span><span id="rateLabel">0 / MIN</span></div>
           </article>
-          <p class="privacy-note"><span>⌂</span> This simulation runs locally on your device.</p>
+          <p class="privacy-note"><span>⌂</span> Simulation and learned world memory stay on your device.</p>
         </aside>
       </section>
 
@@ -96,6 +96,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <dialog id="helpDialog" class="help-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close">×</button></form><span class="section-kicker">FIELD GUIDE</span><h2>Make a world.<br><em>Let them learn it.</em></h2><ul><li><b>Food tool:</b> left-click in the field to drop a pile. Right-click a pile to remove it.</li><li><b>Obstacle tool:</b> click to place a rock. Workers learn to route around it.</li><li><b>Eraser:</b> click a food pile or rock to remove it.</li><li><b>Worker collisions:</b> workers have solid personal space. A collision during a food pickup is an attack; both workers die.</li><li><b>Simulation:</b> pause, resume, or clear your edits whenever you like.</li><li><b>Learning:</b> workers update a small tabular Q-learning policy as they explore, collect food, and hit obstacles.</li></ul><p>Spread food piles apart to reduce fights. Refresh to start a fresh colony.</p><form method="dialog"><button class="play-button dialog-done">Got it</button></form></dialog>
+  <dialog id="helpDialog" class="help-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close">×</button></form><span class="section-kicker">FIELD GUIDE</span><h2>Make a world.<br><em>Let them learn it.</em></h2><ul><li><b>Food tool:</b> left-click in the field to drop a pile. Right-click a pile to remove it.</li><li><b>Obstacle tool:</b> click to place a rock. Workers learn to route around it.</li><li><b>Eraser:</b> click a food pile or rock to remove it.</li><li><b>Worker collisions:</b> workers have solid personal space. A collision during a food pickup is an attack; both workers die.</li><li><b>Simulation:</b> pause, resume, or clear your edits whenever you like.</li><li><b>Learning:</b> workers update a small tabular Q-learning policy as they explore, collect food, and hit obstacles.</li></ul><p>Spread food piles apart to reduce fights. Workers restart fresh; the learned colony brain is saved locally.</p><form method="dialog"><button class="play-button dialog-done">Got it</button></form></dialog>
 </body>
 </html>

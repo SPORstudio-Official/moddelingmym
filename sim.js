@@ -24,6 +24,9 @@
   let running = true, speed = 1, tool = 'food', frame = 0, simTime = 0;
   let foodStock = 58, delivered = 0, learningUpdates = 0, trips = 0;
   let qTable = Array.from({ length: 64 }, () => Array(8).fill(0));
+  const sourceMemories = new Map();
+  let nextMemoryId = 1, lastRoleCheck = 0, lastBrainSave = 0;
+  const MEMORY_KEY = 'colony-cognitive-memory-v3';
   let trails = new Float32Array(GW * GH);
   const visitCount = new Uint16Array(GW * GH);
   let deliveries = [], chartHistory = [], lastChartTime = 0, lastStatsTime = 0;
@@ -40,7 +43,58 @@
   function resetWorld() {
     foods.splice(0, foods.length, ...presets.food.map(p => ({ ...p })));
     obstacles.splice(0, obstacles.length, ...presets.rocks.map(p => ({ ...p })));
+    for (const food of foods) recallSource(food);
     mapVersion++;
+  }
+
+  function recallSource(food) {
+    if (food.memoryId && sourceMemories.has(food.memoryId)) return sourceMemories.get(food.memoryId);
+    let memory = [...sourceMemories.values()].find(m => Math.hypot(m.x - food.x, m.y - food.y) < 28);
+    if (!memory) {
+      memory = { id: nextMemoryId++, x: food.x, y: food.y, quality: .45, known: false, active: true,
+        visits: 0, successes: 0, failures: 0, averageTrip: 0, lastSeen: simTime, available: food.amount };
+      sourceMemories.set(memory.id, memory);
+    }
+    food.memoryId = memory.id;
+    food.quality = memory.quality;
+    food.discovered = food.discovered || memory.known;
+    memory.active = true;
+    memory.available = food.amount;
+    return memory;
+  }
+
+  function rememberSource(food) {
+    const memory = recallSource(food);
+    memory.known = true;
+    memory.active = food.amount > 0;
+    memory.lastSeen = simTime;
+    memory.available = food.amount;
+    return memory;
+  }
+
+  function loadColonyMemory() {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(MEMORY_KEY) || 'null');
+      if (!saved || saved.version !== 3) return;
+      if (Array.isArray(saved.qTable) && saved.qTable.length === 64) {
+        qTable = saved.qTable.map(row => Array.from({ length: 8 }, (_, i) => Number(row[i]) || 0));
+      }
+      if (Array.isArray(saved.visits) && saved.visits.length === visitCount.length) visitCount.set(saved.visits.map(v => clamp(Number(v) || 0, 0, 65535)));
+      if (Array.isArray(saved.sources)) for (const source of saved.sources) {
+        if (!source || !Number.isFinite(source.id)) continue;
+        sourceMemories.set(source.id, source);
+        nextMemoryId = Math.max(nextMemoryId, source.id + 1);
+      }
+      learningUpdates = Math.max(0, Number(saved.learningUpdates) || 0);
+    } catch { /* Storage may be disabled; the simulation remains fully playable. */ }
+  }
+
+  function saveColonyMemory() {
+    try {
+      window.localStorage.setItem(MEMORY_KEY, JSON.stringify({ version: 3, qTable, visits: Array.from(visitCount),
+        sources: [...sourceMemories.values()], learningUpdates }));
+      lastBrainSave = simTime;
+    } catch { /* Storage may be unavailable or full; keep running without persistence. */ }
   }
 
   function spawnAnt(i = ants.length, atNest = true) {
@@ -52,7 +106,8 @@
     const role = scoutCount < scoutQuota ? 'scout' : 'forager';
     const antId = nextAntId++;
     ants.push({ id: antId, x, y, angle, role, radius: workerRadius, carrying: false, target: null, foodSource: null, roam: null,
-      stepTimer: Math.random() * .11, prevState: -1, prevAction: -1, prevDist: 0,
+      individualQ: new Float32Array(64 * 8), episodes: [], stepTimer: Math.random() * .11,
+      prevState: -1, prevAction: -1, prevDist: 0,
       exploration: role === 'scout' ? .34 + Math.random() * .11 : .10 + Math.random() * .07,
       trips: 0, trailTimer: 0, age: 0 });
   }
@@ -273,7 +328,12 @@
     if (existing) {
       existing.amount = Math.min(120, existing.amount + 20);
       existing.default = false;
-    } else foods.push({ x: p.x, y: p.y, amount: 24, default: false });
+      recallSource(existing).active = true;
+      recallSource(existing).available = existing.amount;
+    } else {
+      const pile = { x: p.x, y: p.y, amount: 24, default: false };
+      foods.push(pile); recallSource(pile);
+    }
     toast('Food dropped · the colony can smell it');
     hintForTool();
   }
@@ -282,6 +342,7 @@
     const food = nearest(foods, p, 48);
     if (!food) { toast('No food pile close enough to remove'); return; }
     foods.splice(foods.indexOf(food), 1);
+    const memory = recallSource(food); memory.active = false; memory.available = 0; memory.lastSeen = simTime;
     for (const ant of ants) if (ant.target === food) releaseTarget(ant);
     toast('Food pile removed');
   }
@@ -425,10 +486,13 @@
       const d = distance(ant, f);
       if (f.discovered || d < 76) {
         f.discovered = true;
-        const quality = f.quality ?? .45;
+        const memory = rememberSource(f);
+        const quality = memory.quality ?? .45;
         const scoutDetour = ant.role === 'scout' && d > 125 ? 210 : 0;
         const crowding = Math.max(0, (f.claimedBy || 0) - 2) * 55;
-        const score = d * (1.14 - quality * .34) - Math.min(72, f.amount) * .42 + crowding + scoutDetour;
+        const personalBias = clamp(ant.episodes.reduce((sum, episode) => sum +
+          (episode.memoryId === memory.id ? (episode.success ? 5 : -12) : 0), 0), -32, 20);
+        const score = d * (1.14 - quality * .34) - Math.min(72, f.amount) * .42 + crowding + scoutDetour - personalBias;
         if (score < bestScore) { best = f; bestScore = score; }
       }
     }
@@ -491,7 +555,8 @@
       const nx = ant.x + dir.x * 10, ny = ant.y + dir.y * 10;
       const blocked = obstacleBlocked(nx, ny, 7);
       let score = (dir.x * vx + dir.y * vy) / d * 2.1;
-      score += clamp(qTable[state][i], -1, 1) * .18;
+      score += clamp(qTable[state][i], -1, 1) * .11;
+      score += clamp(ant.individualQ[state * 8 + i], -1, 1) * .22;
       if (!ant.carrying) score += (trailAt(nx, ny) - trailAt(ant.x - dir.x * 10, ant.y - dir.y * 10)) * .62;
       if (blocked) score -= 2.4;
       score -= crowdPenaltyAt(nx, ny, ant) * 2.6;
@@ -506,7 +571,15 @@
       const row = qTable[ant.prevState];
       const bestFuture = terminal ? 0 : Math.max(...qTable[nextState]);
       const old = row[ant.prevAction];
-      row[ant.prevAction] = old + .12 * (reward + .84 * bestFuture - old);
+      const target = reward + .84 * bestFuture;
+      row[ant.prevAction] = old + .12 * (target - old);
+      if (ant.individualQ) {
+        const offset = ant.prevState * 8;
+        let personalFuture = -Infinity;
+        for (let i = 0; i < 8; i++) personalFuture = Math.max(personalFuture, ant.individualQ[nextState * 8 + i]);
+        const localIndex = offset + ant.prevAction;
+        ant.individualQ[localIndex] += .10 * (reward + (terminal ? 0 : .78 * personalFuture) - ant.individualQ[localIndex]);
+      }
       learningUpdates++;
     }
     ant.prevState = state;
@@ -560,6 +633,7 @@
       source.amount--;
       source.discovered = true;
       source.visits = (source.visits || 0) + 1;
+      const sourceMemory = rememberSource(source); sourceMemory.visits++;
       ant.foodSource = source;
       ant.pickupSource = source;
       ant.pickupAt = simTime;
@@ -578,9 +652,17 @@
       ant.roam = null;
       if (ant.foodSource) {
         const source = ant.foodSource;
-        const routeEfficiency = clamp(1 - (simTime - (ant.tripStartedAt || simTime)) / 105, .04, 1);
-        source.quality = (source.quality ?? .45) * .72 + routeEfficiency * .28;
-        source.returns = (source.returns || 0) + 1;
+        const tripDuration = Math.max(.1, simTime - (ant.tripStartedAt || simTime));
+        const routeEfficiency = clamp(1 - tripDuration / 105, .04, 1);
+        const memory = recallSource(source);
+        memory.successes++;
+        memory.averageTrip += (tripDuration - memory.averageTrip) / memory.successes;
+        memory.quality = clamp(memory.quality * .72 + routeEfficiency * .28, .04, 1);
+        memory.lastSeen = simTime; memory.available = source.amount; memory.active = source.amount > 0;
+        source.quality = memory.quality; source.returns = (source.returns || 0) + 1;
+        ant.episodes.push({ memoryId: memory.id, success: true, duration: tripDuration, at: simTime });
+        if (ant.episodes.length > 24) ant.episodes.shift();
+        ant.trips++;
         ant.foodSource = null;
       }
       foodStock++;
@@ -645,8 +727,14 @@
     if (dead.size) {
       for (const ant of dead) {
         updateQ(ant, ant.policyState ?? 0, ant.action ?? 0, -4.5, ant.policyState ?? 0, true);
+        const riskySource = ant.foodSource || ant.target;
+        if (riskySource) {
+          const memory = recallSource(riskySource); memory.failures++; memory.lastSeen = simTime;
+          ant.episodes.push({ memoryId: memory.id, success: false, duration: simTime - (ant.tripStartedAt || simTime), at: simTime });
+          if (ant.episodes.length > 24) ant.episodes.shift();
+        }
         releaseTarget(ant);
-        if (ant.carrying) foods.push({ x: ant.x, y: ant.y, amount: 1, quality: ant.foodSource?.quality ?? .45, discovered: true, default: false });
+        if (ant.carrying) { const dropped = { x: ant.x, y: ant.y, amount: 1, quality: ant.foodSource?.quality ?? .45, discovered: true, default: false }; foods.push(dropped); recallSource(dropped); }
         deathMarks.push({ x: ant.x, y: ant.y, at: simTime });
       }
       ants = ants.filter(ant => !dead.has(ant));
@@ -654,6 +742,21 @@
       toast(`${dead.size} workers lost in a food-pile fight · spread out food to prevent clashes`);
     }
     agentGrid = rebuildAgentGrid();
+  }
+
+  function rebalanceRoles() {
+    if (simTime - lastRoleCheck < 6 || ants.length < 8) return;
+    lastRoleCheck = simTime;
+    const share = foodStock < 24 ? .08 : foodStock > 110 ? .30 : .22;
+    const desired = Math.max(3, Math.round(ants.length * share));
+    const scouts = ants.filter(a => a.role === 'scout');
+    if (scouts.length > desired + 1) {
+      const candidate = scouts.filter(a => !a.carrying).sort((a,b) => a.trips - b.trips || a.age - b.age)[0];
+      if (candidate) { candidate.role = 'forager'; candidate.exploration = .11; candidate.roam = null; }
+    } else if (scouts.length < desired - 1) {
+      const candidate = ants.filter(a => a.role === 'forager' && !a.carrying).sort((a,b) => a.trips - b.trips || a.age - b.age)[0];
+      if (candidate) { candidate.role = 'scout'; candidate.exploration = .33; candidate.roam = null; }
+    }
   }
 
   function update(dt) {
@@ -674,6 +777,8 @@
       spawnAnt(ants.length);
       toast('The queen has raised a new worker');
     }
+    rebalanceRoles();
+    if (simTime - lastBrainSave >= 20) saveColonyMemory();
     if (simTime - lastChartTime >= 2) {
       chartHistory.push({ time: simTime, delivered });
       if (chartHistory.length > 35) chartHistory.shift();
@@ -694,6 +799,10 @@
     $('learningStat').textContent = fmt(learningUpdates);
     $('lossCount').textContent = `${fmt(deaths)} LOST`;
     $('lossCount').classList.toggle('has-losses', deaths > 0);
+    const exploredCells = visitCount.reduce((sum, n) => sum + (n > 0 ? 1 : 0), 0);
+    const rememberedSources = [...sourceMemories.values()].filter(memory => memory.known && memory.active).length;
+    const goal = foodStock < 24 ? 'gathering priority' : foodStock > 110 ? 'exploration priority' : 'balanced priorities';
+    $('memorySummary').textContent = `${exploredCells} map cells · ${rememberedSources} food memories · ${goal}`;
     const mm = Math.floor(simTime / 60), ss = Math.floor(simTime % 60);
     $('timeLabel').textContent = `DAY ${String(Math.floor(mm / 12) + 1).padStart(2, '0')} · ${String(mm % 12).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
     const windowStart = simTime - 60;
@@ -889,6 +998,9 @@
   const worldActions=document.querySelector('.world-actions');
   const divider=document.createElement('span');divider.className='action-divider';worldActions.insertBefore(speedControl,worldActions.querySelector('#playButton'));worldActions.insertBefore(divider,worldActions.querySelector('#playButton'));
 
+  loadColonyMemory();
+  window.addEventListener('beforeunload', saveColonyMemory);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveColonyMemory(); });
   initialize();
   animationId=requestAnimationFrame(loop);
 })();
