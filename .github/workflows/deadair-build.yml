@@ -88,6 +88,11 @@ jobs:
             echo "No API key in this run - keeping the embedded tapes (no status overwrite)."
             echo "did=0" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          if [ "${DISPATCH_PROBE:-}" = "voices" ]; then
+            python3 -m pip install --quiet numpy imageio-ffmpeg
+            python3 tools/probe_voices.py
+            echo "did=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           if [ "${DISPATCH_PROBE:-}" = "1" ]; then
             python3 -m pip install --quiet numpy imageio-ffmpeg
             python3 tools/probe_voice.py
@@ -109,7 +114,7 @@ jobs:
           git config user.name  "dead-air-ci"
           git config user.email "ci@users.noreply.github.com"
           git add -A assets/audio src/audio_data.h
-          git add -A demo/probe_*.wav 2>/dev/null || true
+          git add -A demo/probe_*.wav demo/voice_*.wav 2>/dev/null || true
           rm -f assets/audio/_voice_status.txt.tmp
           if git diff --cached --quiet; then
             echo "nothing to commit"

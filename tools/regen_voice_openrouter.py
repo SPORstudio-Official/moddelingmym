@@ -128,11 +128,15 @@ def dump_models(key):
         % (len(models), len(hits), ", ".join(hits[:25]) or "-"))
 
 
-def try_speech_endpoint(model, voice, text, key):
+def try_speech_endpoint(model, voice, text, key, strict=False):
     # This endpoint only accepts response_format mp3 | pcm.
     for m in (model, model.split(":")[0]):
         for fmt in ("mp3", "pcm"):
-            for v in ((voice, None) if voice else (None,)):
+            if strict and voice:
+                voices = (voice,)
+            else:
+                voices = (voice, None) if voice else (None,)
+            for v in voices:
                 body = {"model": m, "input": text, "response_format": fmt}
                 if v:
                     body["voice"] = v
