@@ -150,6 +150,12 @@ jobs:
           # bytes inside an archive.
           rm -f build/DEAD_AIR-portable.zip
           (cd build && zip -q -9 DEAD_AIR-portable.zip DEAD_AIR.exe DEAD_AIR.exe.sha256)
-          gh release upload deadair build/DEAD_AIR.exe build/DEAD_AIR.exe.sha256 \
-            build/DEAD_AIR-portable.zip --clobber
+          # two runs can publish at once (push + dispatch); retry instead of failing
+          ok=0
+          for i in 1 2 3 4; do
+            if gh release upload deadair build/DEAD_AIR.exe build/DEAD_AIR.exe.sha256 \
+                 build/DEAD_AIR-portable.zip --clobber; then ok=1; break; fi
+            echo "upload attempt $i failed; retrying in 10s"; sleep 10
+          done
+          [ "$ok" = "1" ] || { echo "release upload failed after 4 attempts"; exit 1; }
           echo "https://github.com/${GITHUB_REPOSITORY}/releases/download/deadair/DEAD_AIR.exe"
