@@ -129,7 +129,20 @@ def log(msg):
     LOG.append(line)
 
 
-def request(url, key, payload=None):
+def request(url, key, payload=None, attempts=4):
+    """POST/GET with backoff on 429 / 5xx / transport errors."""
+    st, ct, body = _request_once(url, key, payload)
+    tries = 1
+    while (st == 429 or st == 0 or st >= 500) and tries < attempts:
+        wait = min(30, 2 ** tries)
+        log("  retry %d/%d after HTTP %s (sleeping %ds)" % (tries, attempts - 1, st, wait))
+        time.sleep(wait)
+        st, ct, body = _request_once(url, key, payload)
+        tries += 1
+    return st, ct, body
+
+
+def _request_once(url, key, payload=None):
     data = None
     headers = {
         "Authorization": "Bearer " + key,
@@ -403,7 +416,7 @@ def main():
                     failed = True
                     break
                 cache[ckey] = seg
-                time.sleep(0.4)
+                time.sleep(0.8)
             segs.append((speaker, seg))
             log("  %s line %d/%d  %-12s %s" % (name, idx + 1, len(lines), speaker,
                                                text[:44]))
