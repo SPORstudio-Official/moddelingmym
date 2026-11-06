@@ -66,7 +66,7 @@
               <span class="world-size">FIELD 1000 × 620</span>
             </div>
           </div>
-          <div class="world-footnote"><span class="footnote-icon">↗</span> <span><b>Quick tip</b> &nbsp;Add several food sources and a few rocks. The workers will discover routes and gradually improve them.</span></div>
+          <div class="world-footnote"><span class="footnote-icon">↗</span> <span><b>Quick tip</b> &nbsp;Spread food sources apart; crowded pickups can turn into fatal worker fights.</span></div>
         </div>
 
         <aside class="insights-column">
@@ -83,11 +83,11 @@
           </article>
 
           <article class="panel activity-panel">
-            <div class="activity-heading"><div><span class="section-kicker">COLONY ACTIVITY</span><h2>Food returns</h2></div><span class="activity-live"><i></i> LIVE</span></div>
+            <div class="activity-heading"><div><span class="section-kicker">COLONY ACTIVITY</span><h2>Food returns</h2></div><div class="activity-status"><span class="loss-count" id="lossCount">0 LOST</span><span class="activity-live"><i></i> LIVE</span></div></div>
             <div class="chart-wrap"><canvas id="chart" aria-label="Chart of food deliveries over time"></canvas><div class="chart-overlay" id="chartEmpty">Food deliveries will<br>appear here</div></div>
             <div class="chart-legend"><span><i></i> DELIVERIES / MIN</span><span id="rateLabel">0 / MIN</span></div>
           </article>
-          <p class="privacy-note"><span>⌂</span> This simulation runs entirely in your browser.</p>
+          <p class="privacy-note"><span>⌂</span> This simulation runs locally on your device.</p>
         </aside>
       </section>
 
@@ -96,6 +96,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <dialog id="helpDialog" class="help-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close">×</button></form><span class="section-kicker">FIELD GUIDE</span><h2>Make a world.<br><em>Let them learn it.</em></h2><ul><li><b>Food tool:</b> left-click in the field to drop a pile. Right-click a pile to remove it.</li><li><b>Obstacle tool:</b> click to place a rock. Workers learn to route around it.</li><li><b>Eraser:</b> click a food pile or rock to remove it.</li><li><b>Simulation:</b> pause, resume, or clear your edits whenever you like.</li><li><b>Learning:</b> workers update a small tabular Q-learning policy as they explore, collect food, and hit obstacles.</li></ul><p>Everything runs locally in this tab. Refresh the page to start a fresh colony.</p><form method="dialog"><button class="play-button dialog-done">Got it</button></form></dialog>
+  <dialog id="helpDialog" class="help-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close">×</button></form><span class="section-kicker">FIELD GUIDE</span><h2>Make a world.<br><em>Let them learn it.</em></h2><ul><li><b>Food tool:</b> left-click in the field to drop a pile. Right-click a pile to remove it.</li><li><b>Obstacle tool:</b> click to place a rock. Workers learn to route around it.</li><li><b>Eraser:</b> click a food pile or rock to remove it.</li><li><b>Worker collisions:</b> workers have solid personal space. A collision during a food pickup is an attack; both workers die.</li><li><b>Simulation:</b> pause, resume, or clear your edits whenever you like.</li><li><b>Learning:</b> workers update a small tabular Q-learning policy as they explore, collect food, and hit obstacles.</li></ul><p>Spread food piles apart to reduce fights. Refresh to start a fresh colony.</p><form method="dialog"><button class="play-button dialog-done">Got it</button></form></dialog>
 </body>
 </html>

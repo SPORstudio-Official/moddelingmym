@@ -14,7 +14,12 @@
   const directions = Array.from({ length: 8 }, (_, i) => ({ x: Math.cos(i * Math.PI / 4), y: Math.sin(i * Math.PI / 4) }));
   const foods = [];
   const obstacles = [];
+  const workerRadius = 7.5, queenRadius = 12, agentCell = 24;
   let ants = [];
+  let agentGrid = new Map();
+  let nextAntId = 0;
+  let deaths = 0;
+  const deathMarks = [];
   let running = true, speed = 1, tool = 'food', frame = 0, simTime = 0;
   let foodStock = 58, delivered = 0, learningUpdates = 0, trips = 0;
   let qTable = Array.from({ length: 64 }, () => Array(8).fill(0));
@@ -42,7 +47,8 @@
     const scoutQuota = Math.max(4, Math.ceil((ants.length + 1) * .23));
     const scoutCount = ants.filter(a => a.role === 'scout').length;
     const role = scoutCount < scoutQuota ? 'scout' : 'forager';
-    ants.push({ id: i, x, y, angle, role, carrying: false, target: null, foodSource: null, roam: null,
+    const antId = nextAntId++;
+    ants.push({ id: antId, x, y, angle, role, radius: workerRadius, carrying: false, target: null, foodSource: null, roam: null,
       stepTimer: Math.random() * .11, prevState: -1, prevAction: -1, prevDist: 0,
       exploration: role === 'scout' ? .34 + Math.random() * .11 : .10 + Math.random() * .07,
       trips: 0, trailTimer: 0, age: 0 });
@@ -51,6 +57,9 @@
   function initialize() {
     resetWorld();
     ants = [];
+    nextAntId = 0;
+    deaths = 0;
+    deathMarks.length = 0;
     for (let i = 0; i < 52; i++) spawnAnt(i);
     drawQGrid();
     resize();
@@ -104,8 +113,55 @@
   }
 
   function releaseTarget(ant) {
-    if (ant.target) ant.target.claimedBy = Math.max(0, (ant.target.claimedBy || 1) - 1);
+    if (ant.target) {
+      ant.target.claimedBy = Math.max(0, (ant.target.claimedBy || 1) - 1);
+      if (ant.target.reservedBy === ant) ant.target.reservedBy = null;
+      if (ant.approachSlot != null && ant.target.slotAssignments) ant.target.slotAssignments.delete(ant.approachSlot);
+    }
     ant.target = null;
+    ant.approach = null;
+    ant.approachSlot = null;
+  }
+
+  function gridKey(x, y) {
+    return `${Math.floor(x / agentCell)},${Math.floor(y / agentCell)}`;
+  }
+
+  function rebuildAgentGrid() {
+    const grid = new Map();
+    for (const ant of ants) {
+      const key = gridKey(ant.x, ant.y);
+      if (!grid.has(key)) grid.set(key, []);
+      grid.get(key).push(ant);
+    }
+    return grid;
+  }
+
+  function agentsNear(x, y, exclude = null) {
+    const found = [];
+    const gx = Math.floor(x / agentCell), gy = Math.floor(y / agentCell);
+    for (let cy = gy - 1; cy <= gy + 1; cy++) for (let cx = gx - 1; cx <= gx + 1; cx++) {
+      const group = agentGrid.get(`${cx},${cy}`);
+      if (group) for (const ant of group) if (ant !== exclude) found.push(ant);
+    }
+    return found;
+  }
+
+  function workerOccupies(x, y, ant) {
+    if (Math.hypot(x - (nest.x - 3), y - (nest.y + 8)) < (ant?.radius || workerRadius) + queenRadius) return true;
+    return agentsNear(x, y, ant).some(other => Math.hypot(x - other.x, y - other.y) < (ant?.radius || workerRadius) + other.radius + 1.5);
+  }
+
+  function crowdPenaltyAt(x, y, ant) {
+    let penalty = 0;
+    const safe = (ant?.radius || workerRadius) * 2 + 10;
+    const queenDistance = Math.hypot(x - (nest.x - 3), y - (nest.y + 8));
+    penalty = Math.max(penalty, clamp((safe - queenDistance) / safe, 0, 1));
+    for (const other of agentsNear(x, y, ant)) {
+      const d = Math.hypot(x - other.x, y - other.y);
+      penalty = Math.max(penalty, clamp((safe - d) / safe, 0, 1));
+    }
+    return penalty;
   }
 
   function addFood(p) {
@@ -184,7 +240,7 @@
   $('playButton').addEventListener('click', toggleRun);
   $('clearButton').addEventListener('click', () => {
     resetWorld();
-    for (const ant of ants) { ant.target = null; ant.roam = null; }
+    for (const ant of ants) { ant.target = null; ant.approach = null; ant.roam = null; }
     toast('Field reset to its starting layout');
   });
   $('helpButton').addEventListener('click', () => $('helpDialog').showModal());
@@ -196,10 +252,30 @@
     return false;
   }
 
+  function foodPickupOccupied(food, exclude) {
+    const owner = food.reservedBy;
+    if (owner && owner !== exclude) {
+      const stillValid = ants.includes(owner) && (owner.target === food || (owner.carrying && owner.foodSource === food));
+      if (stillValid) return true;
+      food.reservedBy = null;
+    }
+    return ants.some(other => other !== exclude && other.carrying && other.pickupSource === food &&
+      simTime - (other.pickupAt ?? -Infinity) < .001 && distance(other, food) < 18);
+  }
+
+  function foodApproach(ant) {
+    if (!ant.target || !ant.approach) return ant.target;
+    if (distance(ant, ant.target) < 27 && !foodPickupOccupied(ant.target, ant)) ant.target.reservedBy = ant;
+    if (foodPickupOccupied(ant.target, ant)) return ant.approach;
+    if (distance(ant, ant.approach) > 12) return ant.approach;
+    return ant.target;
+  }
+
   function targetFor(ant) {
     if (ant.carrying) return nest;
-    if (ant.target && foods.includes(ant.target) && ant.target.amount > 0 &&
-        (ant.role === 'scout' || simTime - (ant.targetSince || 0) < 8)) return ant.target;
+    const validTarget = ant.target && foods.includes(ant.target) && ant.target.amount > 0;
+    if (validTarget && (ant.role === 'scout' || simTime - (ant.targetSince || 0) < 15)) return foodApproach(ant);
+    const previousTarget = ant.target, previousApproach = ant.approach, previousSlot = ant.approachSlot;
     releaseTarget(ant);
     // Scouts explore beyond colony memory; foragers rank discovered sources by yield, quality, and congestion.
     let best = null, bestScore = Infinity;
@@ -210,12 +286,27 @@
         f.discovered = true;
         const quality = f.quality ?? .45;
         const scoutDetour = ant.role === 'scout' && d > 125 ? 210 : 0;
-        const crowding = Math.max(0, (f.claimedBy || 0) - 4) * 14;
+        const crowding = Math.max(0, (f.claimedBy || 0) - 2) * 55;
         const score = d * (1.14 - quality * .34) - Math.min(72, f.amount) * .42 + crowding + scoutDetour;
         if (score < bestScore) { best = f; bestScore = score; }
       }
     }
-    if (best) { ant.target = best; ant.targetSince = simTime; best.claimedBy = (best.claimedBy || 0) + 1; return best; }
+    if (best) {
+      ant.target = best; ant.targetSince = simTime; best.claimedBy = (best.claimedBy || 0) + 1;
+      if (best === previousTarget && previousApproach && previousSlot != null) {
+        ant.approach = previousApproach; ant.approachSlot = previousSlot;
+        if (!best.slotAssignments) best.slotAssignments = new Set();
+        best.slotAssignments.add(previousSlot);
+      } else {
+        if (!best.slotAssignments) best.slotAssignments = new Set();
+        let slot = 0; while (best.slotAssignments.has(slot)) slot++;
+        best.slotAssignments.add(slot); ant.approachSlot = slot;
+        const angle = (slot % 8) * Math.PI / 4 + (best.seed || 0);
+        const ring = 29 + Math.floor(slot / 8) * 14;
+        ant.approach = { x: clamp(best.x + Math.cos(angle) * ring, 24, W - 24), y: clamp(best.y + Math.sin(angle) * ring, 24, H - 24) };
+      }
+      return foodApproach(ant);
+    }
     if (!ant.roam || distance(ant, ant.roam) < 35 || obstacleBlocked(ant.roam.x, ant.roam.y, 10)) {
       const a = ant.angle + (Math.random() - .5) * 2.8;
       const range = 110 + Math.random() * 170;
@@ -228,7 +319,8 @@
     const angle = Math.atan2(target.y - ant.y, target.x - ant.x);
     const bearing = ((Math.round(angle / (Math.PI / 4)) % 8) + 8) % 8;
     const ux = Math.cos(angle), uy = Math.sin(angle);
-    const ahead = obstacles.some(o => Math.hypot(o.x - (ant.x + ux * 34), o.y - (ant.y + uy * 34)) < o.r + 16);
+    const ahead = obstacles.some(o => Math.hypot(o.x - (ant.x + ux * 34), o.y - (ant.y + uy * 34)) < o.r + 16) ||
+      workerOccupies(ant.x + ux * 30, ant.y + uy * 30, ant);
     const left = obstacles.some(o => Math.hypot(o.x - (ant.x - uy * 29), o.y - (ant.y + ux * 29)) < o.r + 12);
     const right = obstacles.some(o => Math.hypot(o.x - (ant.x + uy * 29), o.y - (ant.y - ux * 29)) < o.r + 12);
     let terrain = ahead ? 1 : 0;
@@ -251,10 +343,11 @@
       const dir = directions[i];
       const nx = ant.x + dir.x * 10, ny = ant.y + dir.y * 10;
       const blocked = obstacleBlocked(nx, ny, 7);
-      let score = (dir.x * vx + dir.y * vy) / d * 1.65;
-      score += qTable[state][i] * .72;
+      let score = (dir.x * vx + dir.y * vy) / d * 2.1;
+      score += clamp(qTable[state][i], -1, 1) * .18;
       if (!ant.carrying) score += (trailAt(nx, ny) - trailAt(ant.x - dir.x * 10, ant.y - dir.y * 10)) * .62;
       if (blocked) score -= 2.4;
+      score -= crowdPenaltyAt(nx, ny, ant) * 2.6;
       score += (Math.random() - .5) * (randomExplore ? 1.35 : .13);
       if (score > bestScore) { bestScore = score; bestAction = i; }
     }
@@ -291,12 +384,13 @@
     const nx = ant.x + dir.x * pace * dt;
     const ny = ant.y + dir.y * pace * dt;
     let reward = 0;
-    if (obstacleBlocked(nx, ny, 6)) {
+    const rockBlocked = obstacleBlocked(nx, ny, 6);
+    if (rockBlocked) {
       reward -= .9;
       ant.angle += (Math.random() < .5 ? -1 : 1) * .6;
-      ant.x += Math.cos(ant.angle) * pace * dt * .28;
-      ant.y += Math.sin(ant.angle) * pace * dt * .28;
+      ant.stepTimer = 0;
     } else {
+      // Workers may press into a crowd; the collision solver separates bodies immediately after movement.
       ant.x = nx; ant.y = ny;
       const distAfter = distance(ant, target);
       reward += clamp((distBefore - distAfter) / 8, -.14, .14);
@@ -313,12 +407,14 @@
       ant.trailTimer = .08;
     }
 
-    if (!ant.carrying && ant.target && foods.includes(ant.target) && distance(ant, ant.target) < 17 && ant.target.amount > 0) {
+    if (!ant.carrying && ant.target && foods.includes(ant.target) && distance(ant, ant.target) < 17 && ant.target.amount > 0 && !foodPickupOccupied(ant.target, ant)) {
       const source = ant.target;
       source.amount--;
       source.discovered = true;
       source.visits = (source.visits || 0) + 1;
       ant.foodSource = source;
+      ant.pickupSource = source;
+      ant.pickupAt = simTime;
       ant.tripStartedAt = simTime;
       ant.carrying = true;
       ant.roam = null;
@@ -354,11 +450,72 @@
     for (let i = 0; i < trails.length; i++) trails[i] *= fade;
   }
 
+  function isPickupContestant(ant) {
+    const reachingFood = !ant.carrying && ant.target && foods.includes(ant.target) && distance(ant, ant.target) < 18;
+    const justPicked = ant.pickupSource && simTime - (ant.pickupAt ?? -Infinity) < .001 && distance(ant, ant.pickupSource) < 18;
+    return !!(reachingFood || justPicked);
+  }
+
+  function resolveWorkerCollisions() {
+    const dead = new Set();
+    for (let pass = 0; pass < 2; pass++) {
+      agentGrid = rebuildAgentGrid();
+      for (const ant of ants) {
+        if (dead.has(ant)) continue;
+        for (const other of agentsNear(ant.x, ant.y, ant)) {
+          if (other.id <= ant.id || dead.has(other)) continue;
+          let dx = other.x - ant.x, dy = other.y - ant.y;
+          let d = Math.hypot(dx, dy);
+          const minDistance = ant.radius + other.radius;
+          const foodContact = d < minDistance && (isPickupContestant(ant) || isPickupContestant(other));
+          if (foodContact) {
+            dead.add(ant); dead.add(other);
+            continue;
+          }
+          if (d >= minDistance) continue;
+          updateQ(ant, ant.policyState ?? 0, ant.action ?? 0, -.55, ant.policyState ?? 0);
+          updateQ(other, other.policyState ?? 0, other.action ?? 0, -.55, other.policyState ?? 0);
+          if (d < .001) { const a = ((ant.id * 37 + other.id * 13) % 360) * Math.PI / 180; dx = Math.cos(a); dy = Math.sin(a); d = 1; }
+          const separation = (minDistance - d + .08) * .51;
+          const ux = dx / d, uy = dy / d;
+          ant.x -= ux * separation; ant.y -= uy * separation;
+          other.x += ux * separation; other.y += uy * separation;
+        }
+      }
+    }
+    // The queen is a fixed, non-combatant body; workers yield her space.
+    const queen = { x: nest.x - 3, y: nest.y + 8 };
+    for (const ant of ants) {
+      let dx = ant.x - queen.x, dy = ant.y - queen.y;
+      let d = Math.hypot(dx, dy), minDistance = ant.radius + queenRadius;
+      if (d < minDistance) {
+        if (d < .001) { dx = Math.cos(ant.id); dy = Math.sin(ant.id); d = 1; }
+        const shift = minDistance - d + .1;
+        ant.x += dx / d * shift; ant.y += dy / d * shift;
+      }
+    }
+    if (dead.size) {
+      for (const ant of dead) {
+        updateQ(ant, ant.policyState ?? 0, ant.action ?? 0, -4.5, ant.policyState ?? 0, true);
+        releaseTarget(ant);
+        if (ant.carrying) foods.push({ x: ant.x, y: ant.y, amount: 1, quality: ant.foodSource?.quality ?? .45, discovered: true, default: false });
+        deathMarks.push({ x: ant.x, y: ant.y, at: simTime });
+      }
+      ants = ants.filter(ant => !dead.has(ant));
+      deaths += dead.size;
+      toast(`${dead.size} workers lost in a food-pile fight · spread out food to prevent clashes`);
+    }
+    agentGrid = rebuildAgentGrid();
+  }
+
   function update(dt) {
     simTime += dt;
     frame++;
     diffuseTrails(dt);
+    agentGrid = rebuildAgentGrid();
     for (const ant of ants) moveAnt(ant, dt);
+    resolveWorkerCollisions();
+    for (let i = deathMarks.length - 1; i >= 0; i--) if (simTime - deathMarks[i].at > 1.6) deathMarks.splice(i, 1);
     // A well-provisioned nest can support another worker; the queen lays slowly.
     if (simTime % 34 < dt && ants.length < 96 && foodStock >= 10) {
       foodStock -= 10;
@@ -383,6 +540,8 @@
     $('foodStat').textContent = fmt(foodStock);
     $('deliveredStat').textContent = fmt(delivered);
     $('learningStat').textContent = fmt(learningUpdates);
+    $('lossCount').textContent = `${fmt(deaths)} LOST`;
+    $('lossCount').classList.toggle('has-losses', deaths > 0);
     const mm = Math.floor(simTime / 60), ss = Math.floor(simTime % 60);
     $('timeLabel').textContent = `DAY ${String(Math.floor(mm / 12) + 1).padStart(2, '0')} · ${String(mm % 12).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
     const windowStart = simTime - 60;
@@ -471,7 +630,7 @@
     for(const side of [-1,1]) for(const off of [-3,1,5]){
       ctx.beginPath();ctx.moveTo(off*s,side*1.5*s);ctx.lineTo((off-1)*s,side*(4+swing*.35)*s);ctx.lineTo((off-3)*s,side*(5+swing)*s);ctx.stroke();
     }
-    ctx.fillStyle=ant.queen?'#e1a44e':'#355a43';
+    ctx.fillStyle=ant.queen?'#e1a44e':ant.role==='scout'?'#78945d':'#355a43';
     ctx.beginPath();ctx.ellipse(-4.5*s,0,3.8*s,3*s,0,0,Math.PI*2);ctx.fill();
     ctx.beginPath();ctx.ellipse(0,0,2.1*s,1.9*s,0,0,Math.PI*2);ctx.fill();
     ctx.beginPath();ctx.arc(4*s,0,2.1*s,0,Math.PI*2);ctx.fill();
@@ -503,6 +662,16 @@
     ctx.restore();
   }
 
+  function drawDeathMarks() {
+    for (const mark of deathMarks) {
+      const fade = clamp(1 - (simTime - mark.at) / 1.6, 0, 1);
+      ctx.save(); ctx.globalAlpha = fade * .62; ctx.translate(mark.x, mark.y);
+      ctx.strokeStyle = '#b45c4d'; ctx.lineWidth = 2.2; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(-4,-4); ctx.lineTo(4,4); ctx.moveTo(4,-4); ctx.lineTo(-4,4); ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   function draw() {
     if(!canvas.width||!canvas.height)return;
     const rect=canvas.getBoundingClientRect();
@@ -514,6 +683,7 @@
     drawNest();
     for(const o of obstacles)drawObstacle(o);
     for(const f of foods)drawFood(f);
+    drawDeathMarks();
     for(const ant of ants)drawAnt(ant);
     if(pointer.inside){
       ctx.save();ctx.globalAlpha=.65;
