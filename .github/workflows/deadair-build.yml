@@ -134,5 +134,11 @@ jobs:
           )
           gh release view deadair >/dev/null 2>&1 || \
             gh release create deadair --title "DEAD AIR" --notes "$NOTES"
-          gh release upload deadair build/DEAD_AIR.exe build/DEAD_AIR.exe.sha256 --clobber
+          # A plain .zip is also published: some AV download filters block a bare,
+          # unsigned .exe served straight from a release URL but pass the same
+          # bytes inside an archive.
+          rm -f build/DEAD_AIR-portable.zip
+          (cd build && zip -q -9 DEAD_AIR-portable.zip DEAD_AIR.exe DEAD_AIR.exe.sha256)
+          gh release upload deadair build/DEAD_AIR.exe build/DEAD_AIR.exe.sha256 \
+            build/DEAD_AIR-portable.zip --clobber
           echo "https://github.com/${GITHUB_REPOSITORY}/releases/download/deadair/DEAD_AIR.exe"
