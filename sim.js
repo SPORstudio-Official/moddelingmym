@@ -39,9 +39,13 @@
     const angle = Math.random() * Math.PI * 2;
     const x = atNest ? nest.x + Math.cos(angle) * (12 + Math.random() * 27) : nest.x;
     const y = atNest ? nest.y + Math.sin(angle) * (9 + Math.random() * 24) : nest.y;
-    ants.push({ id: i, x, y, angle, carrying: false, target: null, roam: null,
+    const scoutQuota = Math.max(4, Math.ceil((ants.length + 1) * .23));
+    const scoutCount = ants.filter(a => a.role === 'scout').length;
+    const role = scoutCount < scoutQuota ? 'scout' : 'forager';
+    ants.push({ id: i, x, y, angle, role, carrying: false, target: null, foodSource: null, roam: null,
       stepTimer: Math.random() * .11, prevState: -1, prevAction: -1, prevDist: 0,
-      exploration: .16 + Math.random() * .12, trips: 0, trailTimer: 0, age: 0 });
+      exploration: role === 'scout' ? .34 + Math.random() * .11 : .10 + Math.random() * .07,
+      trips: 0, trailTimer: 0, age: 0 });
   }
 
   function initialize() {
@@ -99,6 +103,11 @@
     return result;
   }
 
+  function releaseTarget(ant) {
+    if (ant.target) ant.target.claimedBy = Math.max(0, (ant.target.claimedBy || 1) - 1);
+    ant.target = null;
+  }
+
   function addFood(p) {
     const existing = nearest(foods, p, 34);
     if (existing) {
@@ -113,7 +122,7 @@
     const food = nearest(foods, p, 48);
     if (!food) { toast('No food pile close enough to remove'); return; }
     foods.splice(foods.indexOf(food), 1);
-    for (const ant of ants) if (ant.target === food) ant.target = null;
+    for (const ant of ants) if (ant.target === food) releaseTarget(ant);
     toast('Food pile removed');
   }
 
@@ -189,20 +198,24 @@
 
   function targetFor(ant) {
     if (ant.carrying) return nest;
-    if (ant.target && foods.includes(ant.target) && ant.target.amount > 0) return ant.target;
-    ant.target = null;
-    // Discoverable memory is shared by scent: only known food piles are candidates.
+    if (ant.target && foods.includes(ant.target) && ant.target.amount > 0 &&
+        (ant.role === 'scout' || simTime - (ant.targetSince || 0) < 8)) return ant.target;
+    releaseTarget(ant);
+    // Scouts explore beyond colony memory; foragers rank discovered sources by yield, quality, and congestion.
     let best = null, bestScore = Infinity;
     for (const f of foods) {
       if (f.amount <= 0) continue;
       const d = distance(ant, f);
       if (f.discovered || d < 76) {
         f.discovered = true;
-        const score = d + (f.amount < 4 ? 130 : 0);
+        const quality = f.quality ?? .45;
+        const scoutDetour = ant.role === 'scout' && d > 125 ? 210 : 0;
+        const crowding = Math.max(0, (f.claimedBy || 0) - 4) * 14;
+        const score = d * (1.14 - quality * .34) - Math.min(72, f.amount) * .42 + crowding + scoutDetour;
         if (score < bestScore) { best = f; bestScore = score; }
       }
     }
-    if (best) { ant.target = best; return best; }
+    if (best) { ant.target = best; ant.targetSince = simTime; best.claimedBy = (best.claimedBy || 0) + 1; return best; }
     if (!ant.roam || distance(ant, ant.roam) < 35 || obstacleBlocked(ant.roam.x, ant.roam.y, 10)) {
       const a = ant.angle + (Math.random() - .5) * 2.8;
       const range = 110 + Math.random() * 170;
@@ -240,7 +253,7 @@
       const blocked = obstacleBlocked(nx, ny, 7);
       let score = (dir.x * vx + dir.y * vy) / d * 1.65;
       score += qTable[state][i] * .72;
-      if (!ant.carrying) score += (trailAt(nx, ny) - trailAt(ant.x - dir.x * 10, ant.y - dir.y * 10)) * .12;
+      if (!ant.carrying) score += (trailAt(nx, ny) - trailAt(ant.x - dir.x * 10, ant.y - dir.y * 10)) * .62;
       if (blocked) score -= 2.4;
       score += (Math.random() - .5) * (randomExplore ? 1.35 : .13);
       if (score > bestScore) { bestScore = score; bestAction = i; }
@@ -295,38 +308,49 @@
     ant.trailTimer -= dt;
     if (ant.carrying && ant.trailTimer <= 0) {
       const gx = clamp(Math.floor(ant.x / CELL), 0, GW - 1), gy = clamp(Math.floor(ant.y / CELL), 0, GH - 1);
-      trails[gy * GW + gx] = Math.min(1, trails[gy * GW + gx] + .38);
+      const sourceQuality = ant.foodSource?.quality ?? .45;
+      trails[gy * GW + gx] = Math.min(1, trails[gy * GW + gx] + .20 + sourceQuality * .20);
       ant.trailTimer = .08;
     }
 
     if (!ant.carrying && ant.target && foods.includes(ant.target) && distance(ant, ant.target) < 17 && ant.target.amount > 0) {
-      ant.target.amount--;
-      ant.target.discovered = true;
+      const source = ant.target;
+      source.amount--;
+      source.discovered = true;
+      source.visits = (source.visits || 0) + 1;
+      ant.foodSource = source;
+      ant.tripStartedAt = simTime;
       ant.carrying = true;
       ant.roam = null;
       updateQ(ant, nextState, ant.action ?? 0, 4, nextState, true);
-      if (ant.target.amount <= 0) {
-        foods.splice(foods.indexOf(ant.target), 1);
-        for (const worker of ants) if (worker.target === ant.target) worker.target = null;
+      releaseTarget(ant);
+      if (source.amount <= 0) {
+        foods.splice(foods.indexOf(source), 1);
+        for (const worker of ants) if (worker.target === source) releaseTarget(worker);
       }
-      ant.target = null;
       ant.stepTimer = 0;
     } else if (ant.carrying && distance(ant, nest) < nest.r * .68) {
       ant.carrying = false;
-      ant.target = null;
       ant.roam = null;
+      if (ant.foodSource) {
+        const source = ant.foodSource;
+        const routeEfficiency = clamp(1 - (simTime - (ant.tripStartedAt || simTime)) / 105, .04, 1);
+        source.quality = (source.quality ?? .45) * .72 + routeEfficiency * .28;
+        source.returns = (source.returns || 0) + 1;
+        ant.foodSource = null;
+      }
       foodStock++;
       delivered++;
       trips++;
       deliveries.push(simTime);
       updateQ(ant, nextState, ant.action ?? 0, 6, nextState, true);
       ant.stepTimer = 0;
-      ant.exploration = Math.max(.06, ant.exploration * .993);
+      ant.exploration = ant.role === 'scout' ? Math.max(.2, ant.exploration * .998) : Math.max(.035, ant.exploration * .993);
     }
   }
 
   function diffuseTrails(dt) {
-    const fade = Math.pow(.978, dt * 60);
+    const fade = Math.pow(.992, dt * 60);
     for (let i = 0; i < trails.length; i++) trails[i] *= fade;
   }
 
@@ -354,7 +378,8 @@
 
   function updateStats(force = false) {
     $('populationStat').textContent = fmt(ants.length + 1);
-    $('populationFoot').textContent = `1 QUEEN + ${ants.length} WORKERS`;
+    const scouts = ants.filter(a => a.role === 'scout').length;
+    $('populationFoot').textContent = `${scouts} SCOUTS · ${ants.length - scouts} FORAGERS`;
     $('foodStat').textContent = fmt(foodStock);
     $('deliveredStat').textContent = fmt(delivered);
     $('learningStat').textContent = fmt(learningUpdates);
@@ -434,7 +459,7 @@
     // Queen in chamber
     drawAnt({x:nest.x-3,y:nest.y+8,angle:-.18,queen:true,carrying:false});
     // Label
-    ctx.fillStyle='#6e7c70';ctx.font='500 9px "DM Mono", monospace';ctx.textAlign='center';ctx.fillText('NEST · QUEEN',nest.x,nest.y+76);
+    ctx.fillStyle='#6e7c70';ctx.font='9px "Segoe UI", monospace';ctx.textAlign='center';ctx.fillText('NEST · QUEEN',nest.x,nest.y+76);
   }
 
   function drawAnt(ant) {

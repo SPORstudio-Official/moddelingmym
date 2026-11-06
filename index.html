@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f5f1">
   <title>Colony — Ant Colony Lab</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <script src="sim.js" defer></script>
 </head>
@@ -75,14 +72,14 @@
         <aside class="insights-column">
           <article class="panel brain-panel">
             <div class="panel-heading"><div><span class="section-kicker">THE COLONY BRAIN</span><h2>Learning in motion<span class="green-period">.</span></h2></div><span class="brain-orb"><span>⌘</span></span></div>
-            <p class="panel-copy">Each worker uses a tiny reinforcement-learning policy to choose where to move. Good routes get reinforced; blocked paths get forgotten.</p>
+            <p class="panel-copy">Scouts search new ground; foragers rank known food by yield and crowding. Shared trails strengthen useful routes, while each worker learns to skirt obstacles.</p>
             <div class="learning-graphic">
               <div class="learning-line"><span>POLICY</span><span class="policy-label"><i></i> ONLINE Q-LEARNING</span></div>
               <div class="q-grid" id="qGrid" aria-label="Live learned movement policy"></div>
               <div class="q-axes"><span>STATE →</span><span>ACTION →</span></div>
             </div>
             <div class="brain-facts"><div><span class="fact-key">STATES</span><strong>64</strong><small>bearing × terrain × intent</small></div><div><span class="fact-key">ACTIONS</span><strong>8</strong><small>compass directions</small></div></div>
-            <div class="learning-note"><span class="learning-spark">✳</span><span><b>It learns locally.</b> No network, no pretrained model. The policy adapts to the world you build.</span></div>
+            <div class="learning-note"><span class="learning-spark">✳</span><span><b>It learns locally.</b> Food quality, crowding, scent trails, and obstacle feedback shape the colony's next choice.</span></div>
           </article>
 
           <article class="panel activity-panel">
