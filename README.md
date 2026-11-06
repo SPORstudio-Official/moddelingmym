@@ -1,6 +1,6 @@
 # Colony — Ant Colony Lab
 
-A self-contained desktop colony simulation: shape the terrain, place food, and watch a colony discover, share, and improve routes.
+A self-contained desktop colony simulation: shape the terrain, place food, and watch a blind colony explore by touch, memory, and pheromone.
 
 ## Download for Windows
 
@@ -11,22 +11,22 @@ This is a portable 64-bit Windows desktop app. Download the single `.exe` and ru
 ## Field controls
 
 - **Food (1):** left-click to drop a pile. Right-click a pile to remove it. Click nearby again to add more.
-- **Obstacle (2):** click to place a rock that workers need to learn around.
+- **Obstacle (2):** click to place a rock. Workers cannot see it; they detect it at contact and learn from the bump.
 - **Eraser (3):** click a food pile or rock to remove it.
 - Workers use solid collision hitboxes and steer around one another. If workers collide while either is trying to collect food, it counts as an attack and both workers die; their losses are tracked. Spread food piles apart to lower the risk.
 - Pause/resume the simulation and cycle speeds from 1× to 4×.
-- **Clear edits** restores the starting field. Relaunching resets the individual ants, but the shared learned brain and exploration map persist on this device.
+- **Clear edits** restores the starting field. Relaunching resets individual ants and pheromone, but shared Q-values and learned food-source memories persist on this device.
 
 ## A smarter colony
 
-- **Scouts** choose less-visited regions from a shared exploration-memory map; **foragers** exploit remembered sources and follow useful pheromone trails. The queen shifts worker allocation toward gathering when stores run low and toward exploration when food is abundant.
-- A shared colony memory lets workers direct one another toward discovered food. Foragers rank sources by distance, remaining yield, learned quality, and crowding, then periodically reconsider assignments. Workers get distinct staging points around each pile, with one reserved picker at a time, to reduce jams.
-- Returning workers lay **food pheromone**. Stronger, successful routes persist longer and guide other workers; scent fades over time.
-- Workers run weighted **A*** searches over the field, planning waypoints around rock geometry, worker traffic, and useful scent trails; routes re-plan after terrain changes.
-- A shared online **Q-learning** policy and each worker's individual action values learn from progress, obstacles, crowding, food collection, and delivery. The compact 64-state policy uses eight compass actions and persists between launches.
+- The workers have **no visual sensing**. They explore by random walk, each keeping a private visited-area memory; rocks are found by near-body touch probes and collisions, not a global obstacle map.
+- **Food is found by body contact** or by detecting a nearby scent trail left by a carrier. Movement decisions never use unseen food coordinates; a worker can recall a source location only after visiting it and detecting its source-coded pheromone again.
+- Returning carriers lay directional **food pheromone** pointing back toward the source. Other workers smell the local field, follow the encoded direction, and learn which source produced the trail. Trails fade; successful sources gain quality memory. Their individual reservations and approach slots prevent pileups, while a collision during a contested pickup still kills both workers.
+- A worker returning to the nest uses path integration (its internally updated home vector), so it does not need to see the nest. The queen shifts the scout/forager balance toward gathering when stores run low and toward exploration when stores are abundant.
+- Shared and individual online **Q-learning** policies learn from progress, scent-following, touch-based obstacle encounters, food collection, and delivery. The compact shared policy has 64 states and eight compass actions and persists between launches.
 - The queen grows the workforce when the nest has enough stored food. Scouts, foragers, food stores, deliveries, and live policy values are visible in the interface.
 
-This is an inspectable simulation of selected planning and memory behaviors—not a literal crow brain or a pretrained neural model. Learned map, source memories, and shared Q-values are stored locally on-device; no data is sent to a server.
+This is an inspectable simulation of selected planning and memory behaviors—not a literal crow brain or a pretrained neural model. Learned source memories and shared Q-values are stored locally on-device; current pheromone trails fade and reset with a fresh simulation. No data is sent to a server.
 
 ## Run from source
 

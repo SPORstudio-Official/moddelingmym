@@ -17,7 +17,6 @@
   const workerRadius = 7.5, queenRadius = 12, agentCell = 24;
   let ants = [];
   let agentGrid = new Map();
-  let mapVersion = 0;
   let nextAntId = 0;
   let deaths = 0;
   const deathMarks = [];
@@ -26,9 +25,11 @@
   let qTable = Array.from({ length: 64 }, () => Array(8).fill(0));
   const sourceMemories = new Map();
   let nextMemoryId = 1, lastRoleCheck = 0, lastBrainSave = 0;
-  const MEMORY_KEY = 'colony-cognitive-memory-v3';
+  const MEMORY_KEY = 'colony-cognitive-memory-v4';
+  const LEGACY_MEMORY_KEY = 'colony-cognitive-memory-v3';
   let trails = new Float32Array(GW * GH);
-  const visitCount = new Uint16Array(GW * GH);
+  let trailDirX = new Float32Array(GW * GH), trailDirY = new Float32Array(GW * GH);
+  const trailSource = new Int32Array(GW * GH);
   let deliveries = [], chartHistory = [], lastChartTime = 0, lastStatsTime = 0;
   let lastTs = 0, accumulator = 0, animationId = 0, lastToastTimer;
   let pointer = { x: 0, y: 0, inside: false };
@@ -44,7 +45,6 @@
     foods.splice(0, foods.length, ...presets.food.map(p => ({ ...p })));
     obstacles.splice(0, obstacles.length, ...presets.rocks.map(p => ({ ...p })));
     for (const food of foods) recallSource(food);
-    mapVersion++;
   }
 
   function recallSource(food) {
@@ -74,12 +74,11 @@
 
   function loadColonyMemory() {
     try {
-      const saved = JSON.parse(window.localStorage.getItem(MEMORY_KEY) || 'null');
-      if (!saved || saved.version !== 3) return;
+      const saved = JSON.parse(window.localStorage.getItem(MEMORY_KEY) || window.localStorage.getItem(LEGACY_MEMORY_KEY) || 'null');
+      if (!saved || (saved.version !== 3 && saved.version !== 4)) return;
       if (Array.isArray(saved.qTable) && saved.qTable.length === 64) {
         qTable = saved.qTable.map(row => Array.from({ length: 8 }, (_, i) => Number(row[i]) || 0));
       }
-      if (Array.isArray(saved.visits) && saved.visits.length === visitCount.length) visitCount.set(saved.visits.map(v => clamp(Number(v) || 0, 0, 65535)));
       if (Array.isArray(saved.sources)) for (const source of saved.sources) {
         if (!source || !Number.isFinite(source.id)) continue;
         sourceMemories.set(source.id, source);
@@ -91,7 +90,7 @@
 
   function saveColonyMemory() {
     try {
-      window.localStorage.setItem(MEMORY_KEY, JSON.stringify({ version: 3, qTable, visits: Array.from(visitCount),
+      window.localStorage.setItem(MEMORY_KEY, JSON.stringify({ version: 4, qTable,
         sources: [...sourceMemories.values()], learningUpdates }));
       lastBrainSave = simTime;
     } catch { /* Storage may be unavailable or full; keep running without persistence. */ }
@@ -106,7 +105,8 @@
     const role = scoutCount < scoutQuota ? 'scout' : 'forager';
     const antId = nextAntId++;
     ants.push({ id: antId, x, y, angle, role, radius: workerRadius, carrying: false, target: null, foodSource: null, roam: null,
-      individualQ: new Float32Array(64 * 8), episodes: [], stepTimer: Math.random() * .11,
+      individualQ: new Float32Array(64 * 8), episodes: [], personalVisits: new Uint8Array(GW * GH),
+      homeVectorX: nest.x - x, homeVectorY: nest.y - y, stepTimer: Math.random() * .11,
       prevState: -1, prevAction: -1, prevDist: 0,
       exploration: role === 'scout' ? .34 + Math.random() * .11 : .10 + Math.random() * .07,
       trips: 0, trailTimer: 0, age: 0 });
@@ -122,7 +122,7 @@
     drawQGrid();
     resize();
     updateStats(true);
-    toast('Colony started · workers are mapping the field');
+    toast('Colony started · workers explore by touch, memory, and scent');
   }
 
   function resize() {
@@ -222,106 +222,11 @@
     return penalty;
   }
 
-  function cellCoords(id) { return { x: id % GW, y: Math.floor(id / GW) }; }
   function cellId(x, y) { return y * GW + x; }
   function cellCenter(x, y) { return { x: x * CELL + CELL / 2, y: y * CELL + CELL / 2 }; }
 
-  function makeMinHeap() {
-    const items = [];
-    return {
-      get size() { return items.length; },
-      push(item) {
-        items.push(item); let i = items.length - 1;
-        while (i > 0) { const p = (i - 1) >> 1; if (items[p].score <= item.score) break; items[i] = items[p]; i = p; }
-        items[i] = item;
-      },
-      pop() {
-        if (!items.length) return null;
-        const first = items[0], last = items.pop();
-        if (items.length) {
-          let i = 0;
-          while (true) {
-            let child = i * 2 + 1;
-            if (child >= items.length) break;
-            if (child + 1 < items.length && items[child + 1].score < items[child].score) child++;
-            if (items[child].score >= last.score) break;
-            items[i] = items[child]; i = child;
-          }
-          items[i] = last;
-        }
-        return first;
-      }
-    };
-  }
-
-  function planRoute(ant, target) {
-    const startX = clamp(Math.floor(ant.x / CELL), 0, GW - 1), startY = clamp(Math.floor(ant.y / CELL), 0, GH - 1);
-    const start = cellId(startX, startY);
-    const goalX = clamp(Math.floor(target.x / CELL), 0, GW - 1), goalY = clamp(Math.floor(target.y / CELL), 0, GH - 1);
-    let endX = goalX, endY = goalY;
-    const blocked = (x, y) => x < 1 || y < 1 || x >= GW - 1 || y >= GH - 1 ||
-      obstacles.some(o => Math.hypot(o.x - (x * CELL + CELL / 2), o.y - (y * CELL + CELL / 2)) < o.r + ant.radius + 5);
-    if (blocked(endX, endY)) {
-      let best = null, bestDistance = Infinity;
-      for (let r = 1; r <= 6 && !best; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-        const x = goalX + dx, y = goalY + dy;
-        if (blocked(x, y)) continue;
-        const d = Math.hypot(x * CELL + CELL / 2 - target.x, y * CELL + CELL / 2 - target.y);
-        if (d < bestDistance) { best = { x, y }; bestDistance = d; }
-      }
-      if (best) { endX = best.x; endY = best.y; }
-    }
-    const goal = cellId(endX, endY);
-    ant.route = []; ant.routeIndex = 0; ant.routeTarget = target;
-    ant.routePlannedAt = simTime; ant.routeMapVersion = mapVersion;
-    if (goal === start) return;
-
-    const count = GW * GH, costs = new Float64Array(count), parent = new Int32Array(count), closed = new Uint8Array(count);
-    costs.fill(Infinity); parent.fill(-1); costs[start] = 0;
-    const open = makeMinHeap();
-    const heuristic = (x, y) => {
-      const dx = Math.abs(endX - x), dy = Math.abs(endY - y);
-      return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
-    };
-    open.push({ id: start, score: heuristic(startX, startY) });
-    const steps = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,Math.SQRT2],[1,-1,Math.SQRT2],[-1,1,Math.SQRT2],[-1,-1,Math.SQRT2]];
-    let reached = false;
-    while (open.size) {
-      const current = open.pop().id;
-      if (closed[current]) continue;
-      if (current === goal) { reached = true; break; }
-      closed[current] = 1;
-      const c = cellCoords(current);
-      for (const [dx, dy, length] of steps) {
-        const x = c.x + dx, y = c.y + dy;
-        if (blocked(x, y)) continue;
-        if (dx && dy && (blocked(c.x + dx, c.y) || blocked(c.x, c.y + dy))) continue;
-        const next = cellId(x, y);
-        if (closed[next]) continue;
-        const point = cellCenter(x, y);
-        const traffic = crowdPenaltyAt(point.x, point.y, ant);
-        const scentDiscount = !ant.carrying ? Math.min(.18, trailAt(point.x, point.y) * .10) : 0;
-        const newCost = costs[current] + length * (1 + traffic * .65) * (1 - scentDiscount);
-        if (newCost >= costs[next]) continue;
-        costs[next] = newCost; parent[next] = current;
-        open.push({ id: next, score: newCost + heuristic(x, y) });
-      }
-    }
-    if (!reached) return;
-    const path = [];
-    let cursor = goal;
-    while (cursor !== start && cursor >= 0) {
-      const c = cellCoords(cursor); path.push(cellCenter(c.x, c.y)); cursor = parent[cursor];
-    }
-    if (cursor === start) ant.route = path.reverse();
-  }
-
-  function steeringTarget(ant, intent) {
-    if (ant.routeTarget !== intent || ant.routeMapVersion !== mapVersion || simTime - (ant.routePlannedAt || -Infinity) > 1.6) planRoute(ant, intent);
-    while (ant.routeIndex < ant.route.length && distance(ant, ant.route[ant.routeIndex]) < 11) ant.routeIndex++;
-    return ant.route[ant.routeIndex] || intent;
-  }
+  // Route choices use only a worker's own memory, touch feedback, and nearby pheromone.
+  function steeringTarget(ant, intent) { return intent; }
 
   function addFood(p) {
     const existing = nearest(foods, p, 34);
@@ -334,7 +239,7 @@
       const pile = { x: p.x, y: p.y, amount: 24, default: false };
       foods.push(pile); recallSource(pile);
     }
-    toast('Food dropped · the colony can smell it');
+    toast('Food dropped · workers must find it by chance or scent');
     hintForTool();
   }
 
@@ -351,15 +256,14 @@
     if (distance(p, nest) < nest.r + 19) { toast('Keep rocks clear of the colony entrance'); return; }
     if (nearest(obstacles, p, 47)) { toast('There is already a rock nearby'); return; }
     obstacles.push({ x: p.x, y: p.y, r: 21 + Math.random() * 12, default: false, seed: Math.random() * 100 });
-    mapVersion++;
-    toast('Rock placed · workers will plan a new route around it');
+    toast('Rock placed · blind workers will feel it at close range');
     hintForTool();
   }
 
   function eraseAt(p) {
     const f = nearest(foods, p, 46), o = nearest(obstacles, p, 47);
     if (f && (!o || distance(f, p) < distance(o, p))) removeFood(p);
-    else if (o) { obstacles.splice(obstacles.indexOf(o), 1); mapVersion++; toast('Obstacle erased · routes will update'); }
+    else if (o) { obstacles.splice(obstacles.indexOf(o), 1); toast('Obstacle erased'); }
     else toast('Nothing under the eraser');
   }
 
@@ -436,92 +340,73 @@
     return ant.target;
   }
 
-  function scoutExploreGoal(ant) {
+  function explorationGoal(ant) {
     let best = null, bestScore = Infinity;
-    for (let i = 0; i < 36; i++) {
+    for (let i = 0; i < 24; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const range = 170 + Math.random() * 300;
-      const x = clamp(ant.x + Math.cos(angle) * range, 30, W - 30);
-      const y = clamp(ant.y + Math.sin(angle) * range, 30, H - 30);
-      if (obstacleBlocked(x, y, 12)) continue;
+      const range = ant.role === 'scout' ? 200 + Math.random() * 220 : 105 + Math.random() * 170;
+      const x = clamp(ant.x + Math.cos(angle) * range, 28, W - 28);
+      const y = clamp(ant.y + Math.sin(angle) * range, 28, H - 28);
       const gx = Math.floor(x / CELL), gy = Math.floor(y / CELL);
-      let localVisits = 0;
+      let personalRevisits = 0;
       for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
         const cx = gx + ox, cy = gy + oy;
-        if (cx >= 0 && cy >= 0 && cx < GW && cy < GH) localVisits += visitCount[cellId(cx, cy)];
+        if (cx >= 0 && cy >= 0 && cx < GW && cy < GH) personalRevisits += ant.personalVisits[cellId(cx, cy)];
       }
-      const scoutCrowd = ants.reduce((count, other) => count + (other !== ant && other.role === 'scout' && other.roam && distance(other.roam, {x,y}) < 100 ? 1 : 0), 0);
-      const score = localVisits * 3 + scoutCrowd * 28 + Math.abs(range - 260) * .025 + Math.random() * 4;
+      const score = personalRevisits * 5 + Math.abs(range - (ant.role === 'scout' ? 300 : 180)) * .035 + Math.random() * 3;
       if (score < bestScore) { bestScore = score; best = { x, y }; }
+    }
+    return best || { x: ant.x + Math.cos(ant.angle) * 120, y: ant.y + Math.sin(ant.angle) * 120 };
+  }
+
+  function detectFoodTrail(ant) {
+    const gx = Math.floor(ant.x / CELL), gy = Math.floor(ant.y / CELL);
+    let best = null, bestScore = .018;
+    for (let y = Math.max(1, gy - 6); y <= Math.min(GH - 2, gy + 6); y++) {
+      for (let x = Math.max(1, gx - 6); x <= Math.min(GW - 2, gx + 6); x++) {
+        const idx = cellId(x, y), d = Math.hypot((x + .5) * CELL - ant.x, (y + .5) * CELL - ant.y);
+        if (d > 135 || trails[idx] < .025 || trailSource[idx] <= 0) continue;
+        const score = trails[idx] - d * .00028;
+        if (score > bestScore) bestScore = score, best = { id: trailSource[idx], x: trailDirX[idx], y: trailDirY[idx], strength: trails[idx] };
+      }
     }
     return best;
   }
 
-  function trailMemoryGoal(ant) {
-    let best = null, bestScore = .08;
-    const radius = Math.ceil(180 / CELL);
-    const gx = Math.floor(ant.x / CELL), gy = Math.floor(ant.y / CELL);
-    for (let y = Math.max(1, gy - radius); y <= Math.min(GH - 2, gy + radius); y++) {
-      for (let x = Math.max(1, gx - radius); x <= Math.min(GW - 2, gx + radius); x++) {
-        const point = cellCenter(x, y), d = Math.hypot(point.x - ant.x, point.y - ant.y);
-        if (d < 45 || d > 180) continue;
-        const scent = trails[cellId(x, y)];
-        const score = scent - d * .00045;
-        if (score > bestScore) { bestScore = score; best = point; }
-      }
-    }
-    return best;
+  function reserveRememberedSource(ant, food) {
+    if (ant.target === food) return;
+    releaseTarget(ant);
+    ant.target = food;
+    ant.targetSince = simTime;
+    food.claimedBy = (food.claimedBy || 0) + 1;
+    if (!food.slotAssignments) food.slotAssignments = new Set();
+    let slot = 0; while (food.slotAssignments.has(slot)) slot++;
+    food.slotAssignments.add(slot); ant.approachSlot = slot;
+    const angle = slot * 2.399 + (food.seed || 0);
+    const ring = 29 + Math.floor(slot / 8) * 14;
+    ant.approach = { x: clamp(food.x + Math.cos(angle) * ring, 24, W - 24), y: clamp(food.y + Math.sin(angle) * ring, 24, H - 24) };
   }
 
   function targetFor(ant) {
-    if (ant.carrying) return nest;
+    if (ant.carrying) return { x: clamp(ant.x + ant.homeVectorX, 20, W - 20), y: clamp(ant.y + ant.homeVectorY, 20, H - 20) };
     const validTarget = ant.target && foods.includes(ant.target) && ant.target.amount > 0;
-    if (validTarget && (ant.role === 'scout' || simTime - (ant.targetSince || 0) < 15)) return foodApproach(ant);
-    const previousTarget = ant.target, previousApproach = ant.approach, previousSlot = ant.approachSlot;
-    releaseTarget(ant);
-    // Scouts explore beyond colony memory; foragers rank discovered sources by yield, quality, and congestion.
-    let best = null, bestScore = Infinity;
-    for (const f of foods) {
-      if (f.amount <= 0) continue;
-      const d = distance(ant, f);
-      if (f.discovered || d < 76) {
-        f.discovered = true;
-        const memory = rememberSource(f);
-        const quality = memory.quality ?? .45;
-        const scoutDetour = ant.role === 'scout' && d > 125 ? 210 : 0;
-        const crowding = Math.max(0, (f.claimedBy || 0) - 2) * 55;
-        const personalBias = clamp(ant.episodes.reduce((sum, episode) => sum +
-          (episode.memoryId === memory.id ? (episode.success ? 5 : -12) : 0), 0), -32, 20);
-        const score = d * (1.14 - quality * .34) - Math.min(72, f.amount) * .42 + crowding + scoutDetour - personalBias;
-        if (score < bestScore) { best = f; bestScore = score; }
-      }
-    }
-    if (best) {
-      ant.target = best; ant.targetSince = simTime; best.claimedBy = (best.claimedBy || 0) + 1;
-      if (best === previousTarget && previousApproach && previousSlot != null) {
-        ant.approach = previousApproach; ant.approachSlot = previousSlot;
-        if (!best.slotAssignments) best.slotAssignments = new Set();
-        best.slotAssignments.add(previousSlot);
-      } else {
-        if (!best.slotAssignments) best.slotAssignments = new Set();
-        let slot = 0; while (best.slotAssignments.has(slot)) slot++;
-        best.slotAssignments.add(slot); ant.approachSlot = slot;
-        const angle = (slot % 8) * Math.PI / 4 + (best.seed || 0);
-        const ring = 29 + Math.floor(slot / 8) * 14;
-        ant.approach = { x: clamp(best.x + Math.cos(angle) * ring, 24, W - 24), y: clamp(best.y + Math.sin(angle) * ring, 24, H - 24) };
-      }
+    const checkScent = simTime - (ant.lastTargetCheck ?? -Infinity) >= 3;
+    if (validTarget && !checkScent) return foodApproach(ant);
+    if (!validTarget && !checkScent && ant.roam) return ant.roam;
+
+    ant.lastTargetCheck = simTime;
+    const scent = detectFoodTrail(ant);
+    const memory = scent && sourceMemories.get(scent.id);
+    const scentedFood = memory?.known && memory.active ? foods.find(food => food.memoryId === memory.id && food.amount > 0) : null;
+    if (scentedFood) {
+      reserveRememberedSource(ant, scentedFood);
+      ant.targetLastScentAt = simTime;
       return foodApproach(ant);
     }
-    if (!ant.roam || distance(ant, ant.roam) < 35 || obstacleBlocked(ant.roam.x, ant.roam.y, 10)) {
-      const rememberedTrail = ant.role === 'forager' ? trailMemoryGoal(ant) : null;
-      const rememberedFrontier = ant.role === 'scout' ? scoutExploreGoal(ant) : null;
-      const memoryGoal = rememberedTrail || rememberedFrontier;
-      if (memoryGoal) ant.roam = memoryGoal;
-      else {
-        const a = ant.angle + (Math.random() - .5) * 2.8;
-        const range = ant.role === 'scout' ? 240 + Math.random() * 240 : 110 + Math.random() * 170;
-        ant.roam = { x: clamp(ant.x + Math.cos(a) * range, 32, W - 32), y: clamp(ant.y + Math.sin(a) * range, 32, H - 32) };
-      }
+    if (validTarget && simTime - (ant.targetLastScentAt || 0) < 18) return foodApproach(ant);
+    if (validTarget) releaseTarget(ant);
+    if (!ant.roam || distance(ant, ant.roam) < 38 || ant.roam.x < 26 || ant.roam.y < 26 || ant.roam.x > W - 26 || ant.roam.y > H - 26) {
+      ant.roam = explorationGoal(ant);
     }
     return ant.roam;
   }
@@ -530,10 +415,10 @@
     const angle = Math.atan2(target.y - ant.y, target.x - ant.x);
     const bearing = ((Math.round(angle / (Math.PI / 4)) % 8) + 8) % 8;
     const ux = Math.cos(angle), uy = Math.sin(angle);
-    const ahead = obstacles.some(o => Math.hypot(o.x - (ant.x + ux * 34), o.y - (ant.y + uy * 34)) < o.r + 16) ||
-      workerOccupies(ant.x + ux * 30, ant.y + uy * 30, ant);
-    const left = obstacles.some(o => Math.hypot(o.x - (ant.x - uy * 29), o.y - (ant.y + ux * 29)) < o.r + 12);
-    const right = obstacles.some(o => Math.hypot(o.x - (ant.x + uy * 29), o.y - (ant.y - ux * 29)) < o.r + 12);
+    // Antennae/touch sensing only: probe just beyond the worker's own body.
+    const ahead = obstacleBlocked(ant.x + ux * 12, ant.y + uy * 12, 7) || workerOccupies(ant.x + ux * 11, ant.y + uy * 11, ant);
+    const left = obstacleBlocked(ant.x - uy * 11, ant.y + ux * 11, 7);
+    const right = obstacleBlocked(ant.x + uy * 11, ant.y - ux * 11, 7);
     let terrain = ahead ? 1 : 0;
     if (!ahead && left !== right) terrain = left ? 2 : 3;
     return (ant.carrying ? 32 : 0) + bearing * 4 + terrain;
@@ -557,7 +442,14 @@
       let score = (dir.x * vx + dir.y * vy) / d * 2.1;
       score += clamp(qTable[state][i], -1, 1) * .11;
       score += clamp(ant.individualQ[state * 8 + i], -1, 1) * .22;
-      if (!ant.carrying) score += (trailAt(nx, ny) - trailAt(ant.x - dir.x * 10, ant.y - dir.y * 10)) * .62;
+      if (!ant.carrying) {
+        score += (trailAt(nx, ny) - trailAt(ant.x - dir.x * 10, ant.y - dir.y * 10)) * .62;
+        const scent = detectFoodTrail(ant);
+        if (scent) {
+          const magnitude = Math.max(.001, Math.hypot(scent.x, scent.y));
+          score += ((dir.x * scent.x + dir.y * scent.y) / magnitude) * Math.min(1, scent.strength * 1.7) * 1.15;
+        }
+      }
       if (blocked) score -= 2.4;
       score -= crowdPenaltyAt(nx, ny, ant) * 2.6;
       score += (Math.random() - .5) * (randomExplore ? 1.35 : .13);
@@ -587,6 +479,7 @@
   }
 
   function moveAnt(ant, dt) {
+    const startX = ant.x, startY = ant.y;
     ant.age += dt;
     ant.stepTimer -= dt;
     const intent = targetFor(ant);
@@ -617,19 +510,32 @@
       reward += clamp((distBefore - distAfter) / 8, -.14, .14);
     }
     ant.x = clamp(ant.x, 17, W - 17); ant.y = clamp(ant.y, 17, H - 17);
+    ant.homeVectorX -= ant.x - startX; ant.homeVectorY -= ant.y - startY;
+    ant.contactFood = !ant.carrying ? foods.find(food => food.amount > 0 && distance(ant, food) < 17) || null : null;
     const nextState = stateFor(ant, target);
     updateQ(ant, ant.policyState ?? state, ant.action ?? 0, reward, nextState);
 
     ant.trailTimer -= dt;
     if (ant.carrying && ant.trailTimer <= 0) {
       const gx = clamp(Math.floor(ant.x / CELL), 0, GW - 1), gy = clamp(Math.floor(ant.y / CELL), 0, GH - 1);
-      const sourceQuality = ant.foodSource?.quality ?? .45;
-      trails[gy * GW + gx] = Math.min(1, trails[gy * GW + gx] + .20 + sourceQuality * .20);
+      const idx = cellId(gx, gy), sourceQuality = ant.foodSource?.quality ?? .45;
+      const sourceId = ant.foodSource?.memoryId || 0;
+      const deposit = .20 + sourceQuality * .20;
+      trails[idx] = Math.min(1, trails[idx] + deposit);
+      if (sourceId > 0) {
+        if (trailSource[idx] === sourceId) {
+          const vx = trailDirX[idx] * .78 - dir.x * .22, vy = trailDirY[idx] * .78 - dir.y * .22;
+          const magnitude = Math.max(.001, Math.hypot(vx, vy));
+          trailDirX[idx] = vx / magnitude; trailDirY[idx] = vy / magnitude;
+        } else if (trails[idx] < .35 || deposit > trails[idx] * .45) {
+          trailSource[idx] = sourceId; trailDirX[idx] = -dir.x; trailDirY[idx] = -dir.y;
+        }
+      }
       ant.trailTimer = .08;
     }
 
-    if (!ant.carrying && ant.target && foods.includes(ant.target) && distance(ant, ant.target) < 17 && ant.target.amount > 0 && !foodPickupOccupied(ant.target, ant)) {
-      const source = ant.target;
+    if (!ant.carrying && ant.contactFood && foods.includes(ant.contactFood) && ant.contactFood.amount > 0 && !foodPickupOccupied(ant.contactFood, ant)) {
+      const source = ant.contactFood;
       source.amount--;
       source.discovered = true;
       source.visits = (source.visits || 0) + 1;
@@ -647,8 +553,9 @@
         for (const worker of ants) if (worker.target === source) releaseTarget(worker);
       }
       ant.stepTimer = 0;
-    } else if (ant.carrying && distance(ant, nest) < nest.r * .68) {
+    } else if (ant.carrying && Math.hypot(ant.homeVectorX, ant.homeVectorY) < nest.r * .68) {
       ant.carrying = false;
+      ant.homeVectorX = nest.x - ant.x; ant.homeVectorY = nest.y - ant.y;
       ant.roam = null;
       if (ant.foodSource) {
         const source = ant.foodSource;
@@ -676,14 +583,17 @@
   }
 
   function diffuseTrails(dt) {
-    const fade = Math.pow(.992, dt * 60);
-    for (let i = 0; i < trails.length; i++) trails[i] *= fade;
+    const fade = Math.pow(.9992, dt * 60);
+    for (let i = 0; i < trails.length; i++) {
+      trails[i] *= fade;
+      if (trails[i] < .008) { trails[i] = 0; trailSource[i] = 0; trailDirX[i] = 0; trailDirY[i] = 0; }
+    }
   }
 
   function isPickupContestant(ant) {
-    const reachingFood = !ant.carrying && ant.target && foods.includes(ant.target) && distance(ant, ant.target) < 18;
+    const touchingFood = !ant.carrying && ant.contactFood && foods.includes(ant.contactFood) && distance(ant, ant.contactFood) < 18;
     const justPicked = ant.pickupSource && simTime - (ant.pickupAt ?? -Infinity) < .001 && distance(ant, ant.pickupSource) < 18;
-    return !!(reachingFood || justPicked);
+    return !!(touchingFood || justPicked);
   }
 
   function resolveWorkerCollisions() {
@@ -710,6 +620,8 @@
           const ux = dx / d, uy = dy / d;
           ant.x -= ux * separation; ant.y -= uy * separation;
           other.x += ux * separation; other.y += uy * separation;
+          ant.homeVectorX += ux * separation; ant.homeVectorY += uy * separation;
+          other.homeVectorX -= ux * separation; other.homeVectorY -= uy * separation;
         }
       }
     }
@@ -721,7 +633,9 @@
       if (d < minDistance) {
         if (d < .001) { dx = Math.cos(ant.id); dy = Math.sin(ant.id); d = 1; }
         const shift = minDistance - d + .1;
-        ant.x += dx / d * shift; ant.y += dy / d * shift;
+        const moveX = dx / d * shift, moveY = dy / d * shift;
+        ant.x += moveX; ant.y += moveY;
+        ant.homeVectorX -= moveX; ant.homeVectorY -= moveY;
       }
     }
     if (dead.size) {
@@ -768,7 +682,7 @@
     resolveWorkerCollisions();
     for (const ant of ants) {
       const cell = cellId(clamp(Math.floor(ant.x / CELL), 0, GW - 1), clamp(Math.floor(ant.y / CELL), 0, GH - 1));
-      if (ant.lastVisitCell !== cell) { visitCount[cell] = Math.min(65535, visitCount[cell] + 1); ant.lastVisitCell = cell; }
+      if (ant.lastVisitCell !== cell) { ant.personalVisits[cell] = Math.min(255, ant.personalVisits[cell] + 1); ant.lastVisitCell = cell; }
     }
     for (let i = deathMarks.length - 1; i >= 0; i--) if (simTime - deathMarks[i].at > 1.6) deathMarks.splice(i, 1);
     // A well-provisioned nest can support another worker; the queen lays slowly.
@@ -799,10 +713,10 @@
     $('learningStat').textContent = fmt(learningUpdates);
     $('lossCount').textContent = `${fmt(deaths)} LOST`;
     $('lossCount').classList.toggle('has-losses', deaths > 0);
-    const exploredCells = visitCount.reduce((sum, n) => sum + (n > 0 ? 1 : 0), 0);
+    const scentedCells = trails.reduce((sum, scent) => sum + (scent > .025 ? 1 : 0), 0);
     const rememberedSources = [...sourceMemories.values()].filter(memory => memory.known && memory.active).length;
     const goal = foodStock < 24 ? 'gathering priority' : foodStock > 110 ? 'exploration priority' : 'balanced priorities';
-    $('memorySummary').textContent = `${exploredCells} map cells · ${rememberedSources} food memories · ${goal}`;
+    $('memorySummary').textContent = `${scentedCells} scent traces · ${rememberedSources} remembered sources · ${goal}`;
     const mm = Math.floor(simTime / 60), ss = Math.floor(simTime % 60);
     $('timeLabel').textContent = `DAY ${String(Math.floor(mm / 12) + 1).padStart(2, '0')} · ${String(mm % 12).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
     const windowStart = simTime - 60;
