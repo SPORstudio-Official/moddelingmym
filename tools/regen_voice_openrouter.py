@@ -1,37 +1,35 @@
 #!/usr/bin/env python3
 """
-Re-record the five tapes with a different TTS model (OpenRouter).
-
-The sandbox this game was built in cannot reach openrouter.ai, so the embedded
-tapes were recorded with a local voice. Run this on a machine with internet
-access to swap in another voice, e.g.:
+Re-record the five tapes with an OpenRouter TTS model.
 
     export OPENROUTER_API_KEY=sk-or-...
-    python3 tools/regen_voice_openrouter.py \
-        --model fish-audio/s2.1-pro-free:free --voice default
+    python3 tools/regen_voice_openrouter.py --model fish-audio/s2.1-pro-free:free --voice default
 
-It writes assets/audio/tapeN.wav, rebuilds src/audio_data.h, and then you only
-need to re-run scripts/build_windows.sh to get a new DEAD_AIR.exe.
+Writes assets/audio/*.wav, regenerates src/audio_data.h, and always leaves a
+diagnostic log in assets/audio/_voice_status.txt (so a CI run can be inspected
+without access to the job logs).
 
-Notes
-  * The key is read from the environment and never written to disk or into the
-    repository.
-  * Endpoint: POST https://openrouter.ai/api/v1/audio/speech
-  * If your provider returns mp3/ogg instead of wav, install ffmpeg locally; the
-    script converts automatically when ffmpeg is on PATH.
+Transport order per clip:
+  A. POST /api/v1/audio/speech        (OpenAI-compatible speech endpoint)
+  B. POST /api/v1/chat/completions    (multimodal: audio comes back base64)
+Every attempt is retried without the `voice` field, and without a trailing
+":free" qualifier, before giving up.
 """
 import argparse
 import array
+import base64
 import json
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
+import time
+import urllib.error
 import urllib.request
 import wave
 
-# Each blank line becomes a pause between spoken phrases.
+API = "https://openrouter.ai/api/v1"
+
 TAPES = {
     "tape1": """Nine one one. What is your emergency?
 
@@ -87,44 +85,104 @@ Make a sound. Make a sound.
 I am the air between the words.""",
 }
 
-
-def synth(model, voice, text, key):
-    body = json.dumps({
-        "model": model,
-        "input": text,
-        "voice": voice,
-        "response_format": "wav",
-    }).encode()
-    req = urllib.request.Request(
-        "https://openrouter.ai/api/v1/audio/speech",
-        data=body,
-        headers={
-            "Authorization": "Bearer " + key,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/SPORstudio-Official/moddelingmym",
-            "X-Title": "DEAD AIR",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=180) as r:
-        ctype = r.headers.get("Content-Type", "")
-        return r.read(), ctype
+LOG = []
 
 
-def to_pcm16_mono_sr(data, ctype, out_wav, sr=44100):
-    """Decode provider bytes into a plain 16-bit mono wav at `sr`."""
-    if "wav" in ctype or data[:4] == b"RIFF":
+def log(msg):
+    line = "%s  %s" % (time.strftime("%H:%M:%S"), msg)
+    print(line)
+    LOG.append(line)
+
+
+def request(url, key, payload=None):
+    data = None
+    headers = {
+        "Authorization": "Bearer " + key,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/SPORstudio-Official/moddelingmym",
+        "X-Title": "DEAD AIR",
+    }
+    if payload is not None:
+        data = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, headers=headers,
+                                 method="POST" if data else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=240) as r:
+            return r.status, r.headers.get("Content-Type", ""), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("Content-Type", "") if e.headers else "", e.read()
+    except Exception as e:                                    # noqa: BLE001
+        return 0, "", str(e).encode()
+
+
+def dump_models(key):
+    st, _, body = request(API + "/models", key)
+    try:
+        models = json.loads(body).get("data", [])
+    except Exception:                                          # noqa: BLE001
+        log("models: unparseable response (%s)" % st)
+        return
+    hits = [m.get("id", "") for m in models if "fish" in m.get("id", "").lower()
+            or "audio" in json.dumps(m.get("architecture", {})).lower()]
+    log("models: %d total, %d audio/fish candidates: %s"
+        % (len(models), len(hits), ", ".join(hits[:25]) or "-"))
+
+
+def try_speech_endpoint(model, voice, text, key):
+    for m in (model, model.split(":")[0]):
+        for v in (voice, None):
+            body = {"model": m, "input": text, "response_format": "wav"}
+            if v:
+                body["voice"] = v
+            st, ct, data = request(API + "/audio/speech", key, body)
+            snippet = "" if st == 200 else data[:220].decode("utf-8", "replace").replace("\n", " ")
+            log("A speech model=%s voice=%s -> %s %s %s" % (m, v, st, ct, snippet))
+            if st == 200 and len(data) > 2000:
+                return data, ct
+    return None, None
+
+
+def try_chat_endpoint(model, voice, text, key):
+    for m in (model, model.split(":")[0]):
+        body = {
+            "model": m,
+            "modalities": ["text", "audio"],
+            "audio": {"voice": voice or "alloy", "format": "wav"},
+            "messages": [{"role": "user", "content": text}],
+        }
+        st, ct, data = request(API + "/chat/completions", key, body)
+        if st != 200:
+            log("B chat model=%s -> %s %s" % (m, st,
+                data[:220].decode("utf-8", "replace").replace("\n", " ")))
+            continue
+        try:
+            js = json.loads(data)
+            audio = js["choices"][0]["message"].get("audio") or {}
+            b64 = audio.get("data", "")
+            if b64:
+                if b64.startswith("data:"):
+                    b64 = b64.split(",", 1)[1]
+                raw = base64.b64decode(b64)
+                log("B chat model=%s -> 200 %d bytes (%s)" % (m, len(raw), audio.get("format")))
+                return raw, "audio/wav"
+            log("B chat model=%s -> 200 but no audio field: %s" % (m, json.dumps(js)[:200]))
+        except Exception as e:                                 # noqa: BLE001
+            log("B chat model=%s -> parse error %s" % (m, e))
+    return None, None
+
+
+def to_wav(data, ctype, out_wav, sr=44100):
+    if data[:4] == b"RIFF" or "wav" in (ctype or ""):
         open(out_wav, "wb").write(data)
-        return out_wav
+        return
     ff = shutil.which("ffmpeg")
     if not ff:
-        sys.exit("provider returned %s, and ffmpeg is not installed to convert it" % ctype)
+        raise RuntimeError("no wav returned (%s) and ffmpeg unavailable" % ctype)
     tmp = out_wav + ".src"
     open(tmp, "wb").write(data)
     subprocess.check_call([ff, "-y", "-loglevel", "error", "-i", tmp,
                            "-ac", "1", "-ar", str(sr), out_wav])
     os.remove(tmp)
-    return out_wav
 
 
 def normalize(path, peak=0.92):
@@ -151,32 +209,58 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="fish-audio/s2.1-pro-free:free")
     ap.add_argument("--voice", default="default")
-    ap.add_argument("--only", default="", help="comma separated tape names")
+    ap.add_argument("--only", default="")
     ap.add_argument("--out", default="assets/audio")
     args = ap.parse_args()
 
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if not key:
-        sys.exit("set OPENROUTER_API_KEY first")
-
     os.makedirs(args.out, exist_ok=True)
+    status_path = os.path.join(args.out, "_voice_status.txt")
+
+    def finish(code):
+        open(status_path, "w").write("\n".join(LOG) + "\n")
+        sys.exit(code)
+
+    if not key:
+        log("OPENROUTER_API_KEY is not set")
+        finish(1)
+    log("model=%s voice=%s key=%s..." % (args.model, args.voice, key[:8]))
+
+    dump_models(key)
+
     only = [s.strip() for s in args.only.split(",") if s.strip()]
+    ok = 0
     for name, text in TAPES.items():
         if only and name not in only:
             continue
-        print("recording", name, "...")
-        data, ctype = synth(args.model, args.voice, text, key)
-        if len(data) < 1000:
-            sys.exit("empty audio for %s: %s" % (name, data[:200]))
+        data, ctype = try_speech_endpoint(args.model, args.voice, text, key)
+        if data is None:
+            data, ctype = try_chat_endpoint(args.model, args.voice, text, key)
+        if data is None:
+            log("FAILED to synthesise %s" % name)
+            break
         path = os.path.join(args.out, name + ".wav")
-        to_pcm16_mono_sr(data, ctype, path)
-        normalize(path)
+        try:
+            to_wav(data, ctype, path)
+            normalize(path)
+        except Exception as e:                                 # noqa: BLE001
+            log("FAILED to decode %s: %s" % (name, e))
+            break
         with wave.open(path) as w:
-            print("   %s  %.1fs" % (path, w.getnframes() / w.getframerate()))
+            log("OK %s  %.1fs  %.0f KB" % (path, w.getnframes() / w.getframerate(),
+                                           os.path.getsize(path) / 1024.0))
+        ok += 1
 
-    print("rebuilding src/audio_data.h ...")
+    if ok == 0:
+        finish(1)
+    if ok < len(TAPES) and not only:
+        log("only %d/%d clips recorded" % (ok, len(TAPES)))
+        finish(1)
+
+    log("rebuilding src/audio_data.h")
     subprocess.check_call([sys.executable, "tools/gen_audio.py", args.out, "src/audio_data.h"])
-    print("done. now run scripts/build_windows.sh")
+    log("DONE")
+    finish(0)
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ jobs:
 
       - name: Re-record tapes (optional)
         id: voice
+        continue-on-error: true
         env:
           ORKEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
@@ -55,14 +56,18 @@ jobs:
           python3 tools/regen_voice_openrouter.py --model "$MODEL" --voice "$VOICE"
           echo "did=1" >> "$GITHUB_OUTPUT"
 
-      - name: Commit re-recorded audio
-        if: steps.voice.outputs.did == '1'
+      - name: Commit re-recorded audio and diagnostics
+        if: always()
         run: |
           git config user.name  "dead-air-ci"
           git config user.email "ci@users.noreply.github.com"
-          git add assets/audio src/audio_data.h
-          git diff --cached --quiet || git commit -m "Re-record tape audio via OpenRouter ($(date -u +%FT%TZ))"
-          git push
+          git add -A assets/audio src/audio_data.h
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "Voice job: audio + diagnostics (${{ steps.voice.outcome }})"
+            git push
+          fi
 
       - name: Install zig
         run: |
