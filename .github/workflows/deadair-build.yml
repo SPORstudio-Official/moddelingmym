@@ -19,6 +19,18 @@ on:
       - '.github/voice-request.txt'
       - '.github/workflows/deadair-build.yml'
   workflow_dispatch:
+    inputs:
+      openrouter_key:
+        description: 'OpenRouter API key (leave blank to use the repository secret)'
+        required: false
+      model:
+        description: 'TTS model id'
+        required: false
+        default: 'fish-audio/s2.1-pro-free:free'
+      voice:
+        description: 'voice id'
+        required: false
+        default: 'default'
   repository_dispatch:
     types: [record-voice]
 
@@ -52,9 +64,9 @@ jobs:
           SK_OR_KEY: ${{ secrets.SK_OR_KEY }}
           VAR_OPENROUTER_API_KEY: ${{ vars.OPENROUTER_API_KEY }}
           VAR_OPENROUTER_KEY: ${{ vars.OPENROUTER_KEY }}
-          DISPATCH_KEY: ${{ github.event.client_payload.openrouter_key }}
-          DISPATCH_MODEL: ${{ github.event.client_payload.model }}
-          DISPATCH_VOICE: ${{ github.event.client_payload.voice }}
+          DISPATCH_KEY: ${{ github.event.client_payload.openrouter_key }}${{ github.event.inputs.openrouter_key }}
+          DISPATCH_MODEL: ${{ github.event.client_payload.model }}${{ github.event.inputs.model }}
+          DISPATCH_VOICE: ${{ github.event.client_payload.voice }}${{ github.event.inputs.voice }}
         run: |
           if [ ! -f .github/voice-request.txt ]; then
             echo "No .github/voice-request.txt - keeping the embedded tapes."
