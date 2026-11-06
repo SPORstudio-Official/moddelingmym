@@ -1,0 +1,38 @@
+name: Build Living Notes for Windows
+
+on:
+  push:
+    branches:
+      - main
+      - arena/1d248f79-moddelingmym
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install packager
+        run: python -m pip install --upgrade pyinstaller
+      - name: Package standalone app
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name LivingNotes living_notes.py
+      - name: Publish direct-download Windows executable
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: living-notes-latest
+          name: Living Notes for Windows
+          body: |
+            Latest standalone Windows build of Living Notes. Download `LivingNotes.exe` below and run it; no Python installation is needed.
+
+            Your notebook is stored locally in `%APPDATA%\\LivingNotes\\living-notes.db`.
+          files: dist/LivingNotes.exe
+          overwrite_files: true
+          make_latest: true
