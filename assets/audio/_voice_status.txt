@@ -1,2 +1,2 @@
-16:52:11  env vars with a value: NONE
-16:52:11  no API key found -> cannot record
+16:54:41  env vars with a value: NONE
+16:54:41  no API key found -> cannot record
