@@ -1032,6 +1032,15 @@ static void render_desk(FB *fb) {
     } else {
         draw_desk_scene(fb);
     }
+    /* danger: the room breathes red */
+    if (G.interference > 0.72f) {
+        float a = (G.interference - 0.72f) / 0.45f;
+        float pulse = 0.55f + 0.45f * sinf(G.t * 6.5f);
+        fb_rect_a(fb, 0, 0, fb->w, fb->h, argb((int)(a * pulse * 46.0f), 120, 0, 0));
+        if (G.interference > 0.9f && fmodf(G.t, 1.0f) < 0.12f) {
+            fb_rect_a(fb, 0, 0, fb->w, fb->h, argb((int)(a * 60.0f), 200, 40, 30));
+        }
+    }
     /* clickable affordances */
     hit(0, 0, 0, 0, HIT_NONE);
     hit(300, 330, 160, 24, HIT_STAND);
@@ -1080,7 +1089,7 @@ static void render_room(FB *fb) {
         fb_disc(fb, 319, 20, 4, rgb_(255, 246, 214));
     }
     /* floor with perspective */
-    fb_vgrad(fb, 0, 258, fb->w, 102, rgb_(28, 24, 20), rgb_(11, 10, 9));
+    fb_vgrad(fb, 0, 258, fb->w, 102, rgb_(38, 32, 26), rgb_(14, 13, 11));
     for (int i = 0; i < 10; i++) {
         int y0 = 258 + i * 11;
         fb_rect_a(fb, 0, y0, fb->w, 1, argb(40, 0, 0, 0));
@@ -1255,6 +1264,11 @@ static void render_room(FB *fb) {
         fb_rect(fb, 422 + i * 8, 110, 6, 6, on ? c : rgb_(20, 22, 20));
     }
     txt_draw(fb, 422, 118, "LOAD", argb(130, 160, 152, 135), 1);
+    {
+        char ml[24];
+        snprintf(ml, sizeof ml, "MATCH %dHZ", (int)night()->freq);
+        sticker(fb, 396, 78, ml, argb(235, 215, 185, 125));
+    }
     bevel(fb, 422, 130, 46, 22, G.blackout ? rgb_(78, 32, 26) : rgb_(46, 48, 46));
     txt_center(fb, 445, 136, G.blackout ? "RESET" : "OK", rgb_(225, 225, 215), 1);
     if (G.blackout) {
@@ -1275,6 +1289,11 @@ static void render_room(FB *fb) {
         int nx = 24 + (int)(clampf(G.interference, 0, 1.15f) / 1.15f * 84.0f);
         fb_rect(fb, nx - 1, 30, 2, 10, rgb_(245, 235, 205));
         if (G.interference > 0.75f) led(fb, 108, 22, 3, rgb_(255, 60, 40), 1);
+    }
+    if (night()->attack_night && G.attack_active) {
+        char fb2[40];
+        snprintf(fb2, sizeof fb2, "FEED T-%.1f  %s", G.attack_t, app_name(G.attack_app));
+        txt_draw(fb, 20, 48, fb2, rgb_(230, 190, 90), 1);
     }
 
     /* ================= entity presence ================= */

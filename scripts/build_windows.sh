@@ -4,7 +4,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ZIG="${ZIG:-zig}"
+if [ -z "${ZIG:-}" ]; then
+  if command -v zig >/dev/null 2>&1; then
+    ZIG="$(command -v zig)"
+  elif python3 -c "import ziglang, os, sys; sys.stdout.write(os.path.join(os.path.dirname(ziglang.__file__), 'zig'))" >/dev/null 2>&1; then
+    ZIG="$(python3 -c "import ziglang, os, sys; sys.stdout.write(os.path.join(os.path.dirname(ziglang.__file__), 'zig'))")"
+  else
+    echo "zig not found: set ZIG=/path/to/zig (or pip install ziglang)" >&2
+    exit 1
+  fi
+fi
 mkdir -p build
 
 echo "[1/3] compiling resources"
