@@ -1,0 +1,2 @@
+model=fish-audio/s2.1-pro-free:free
+voice=default

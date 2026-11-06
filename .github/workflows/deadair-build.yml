@@ -1,0 +1,96 @@
+name: Build DEAD AIR (Windows)
+
+# Builds the standalone Windows executable on a runner (which, unlike the agent
+# sandbox, has full internet access) and publishes it as a release asset.
+#
+# Optional voice re-record: commit .github/voice-request.txt containing
+#   model=<openrouter model id>
+#   voice=<voice id>
+# and add the repository secret OPENROUTER_API_KEY. The job then re-records the
+# tapes with tools/regen_voice_openrouter.py before building.
+
+on:
+  push:
+    paths:
+      - 'src/**'
+      - 'assets/**'
+      - 'scripts/**'
+      - 'tools/**'
+      - '.github/voice-request.txt'
+      - '.github/workflows/deadair-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Re-record tapes (optional)
+        id: voice
+        env:
+          ORKEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if [ -z "$ORKEY" ]; then
+            echo "OPENROUTER_API_KEY secret not set - keeping the embedded tapes."
+            echo "did=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ ! -f .github/voice-request.txt ]; then
+            echo "No .github/voice-request.txt - keeping the embedded tapes."
+            echo "did=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          MODEL=$(sed -n 's/^model=//p' .github/voice-request.txt | head -1)
+          VOICE=$(sed -n 's/^voice=//p' .github/voice-request.txt | head -1)
+          MODEL=${MODEL:-fish-audio/s2.1-pro-free:free}
+          VOICE=${VOICE:-default}
+          echo "Re-recording with model=$MODEL voice=$VOICE"
+          python3 -m pip install --quiet numpy
+          python3 tools/regen_voice_openrouter.py --model "$MODEL" --voice "$VOICE"
+          echo "did=1" >> "$GITHUB_OUTPUT"
+
+      - name: Commit re-recorded audio
+        if: steps.voice.outputs.did == '1'
+        run: |
+          git config user.name  "dead-air-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git add assets/audio src/audio_data.h
+          git diff --cached --quiet || git commit -m "Re-record tape audio via OpenRouter ($(date -u +%FT%TZ))"
+          git push
+
+      - name: Install zig
+        run: |
+          python3 -m pip install --quiet ziglang
+          ZIG=$(python3 -c "import ziglang, os; print(os.path.join(os.path.dirname(ziglang.__file__), 'zig'))")
+          chmod +x "$ZIG"
+          "$ZIG" version
+          echo "ZIG=$ZIG" >> "$GITHUB_ENV"
+
+      - name: Build DEAD_AIR.exe
+        run: |
+          python3 tools/gen_icon.py
+          ./scripts/build_windows.sh
+          sha256sum build/DEAD_AIR.exe | tee build/DEAD_AIR.exe.sha256
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES=$(cat <<'EOF'
+          **DEAD AIR** - a tactile / auditory psychological horror game.
+
+          Windows 10/11 x64. Single standalone executable, no installer, no runtime.
+          Unsigned, so SmartScreen may ask you to click *More info -> Run anyway*.
+          Headphones strongly recommended: the game is entirely about what you hear.
+          EOF
+          )
+          gh release view deadair >/dev/null 2>&1 || \
+            gh release create deadair --title "DEAD AIR" --notes "$NOTES"
+          gh release upload deadair build/DEAD_AIR.exe build/DEAD_AIR.exe.sha256 --clobber
+          echo "https://github.com/${GITHUB_REPOSITORY}/releases/download/deadair/DEAD_AIR.exe"
