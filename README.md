@@ -13,12 +13,12 @@ In **DEAD AIR** you have to make noise to survive.
 
 **Standalone Windows build (no installer, no runtime, no dependencies):**
 
-https://github.com/SPORstudio-Official/moddelingmym/raw/main/release/DEAD_AIR.exe
+https://github.com/SPORstudio-Official/moddelingmym/releases/download/deadair/DEAD_AIR.exe
 
-*(on the current feature branch: [raw/arena/96c135af-moddelingmym](https://github.com/SPORstudio-Official/moddelingmym/raw/arena/96c135af-moddelingmym/release/DEAD_AIR.exe))*
+Checksum: https://github.com/SPORstudio-Official/moddelingmym/releases/download/deadair/DEAD_AIR.exe.sha256
 
-File page, if you prefer a download button:
-https://github.com/SPORstudio-Official/moddelingmym/blob/main/release/DEAD_AIR.exe?raw=true
+That asset is rebuilt and replaced by `.github/workflows/deadair-build.yml` on every
+push that touches the game sources.
 
 * Windows 10 / 11, 64-bit. Download the single `.exe` (~3.8 MB) and run it.
 * It is unsigned, so Windows SmartScreen may show *"Windows protected your PC"* → **More info → Run anyway**.
@@ -127,3 +127,15 @@ python3 tools/regen_voice_openrouter.py --model fish-audio/s2.1-pro-free:free --
 The script rewrites `assets/audio/*.wav`, regenerates `src/audio_data.h` and
 leaves you a fresh `build/DEAD_AIR.exe`. The key is read from the environment and
 is never written into the repository.
+
+The same thing runs in CI, which is the only path out of a locked-down environment
+(the build sandbox cannot reach openrouter.ai):
+
+1. Add the repository secret `OPENROUTER_API_KEY` (Settings -> Secrets and
+   variables -> Actions -> New repository secret).
+2. `.github/voice-request.txt` already asks for `fish-audio/s2.1-pro-free:free`;
+   edit `model=` / `voice=` there to change it.
+3. Trigger the workflow (any push, or *Run workflow* in the Actions tab).
+
+The job re-records the tapes, commits them back to the branch, rebuilds the exe
+and replaces the release asset.
