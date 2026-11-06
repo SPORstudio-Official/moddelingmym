@@ -13,7 +13,12 @@ In **DEAD AIR** you have to make noise to survive.
 
 **Standalone Windows build (no installer, no runtime, no dependencies):**
 
-https://github.com/SPORstudio-Official/moddelingmym/releases/latest/download/DEAD_AIR.exe
+https://github.com/SPORstudio-Official/moddelingmym/raw/main/release/DEAD_AIR.exe
+
+*(on the current feature branch: [raw/arena/96c135af-moddelingmym](https://github.com/SPORstudio-Official/moddelingmym/raw/arena/96c135af-moddelingmym/release/DEAD_AIR.exe))*
+
+File page, if you prefer a download button:
+https://github.com/SPORstudio-Official/moddelingmym/blob/main/release/DEAD_AIR.exe?raw=true
 
 * Windows 10 / 11, 64-bit. Download the single `.exe` (~3.8 MB) and run it.
 * It is unsigned, so Windows SmartScreen may show *"Windows protected your PC"* → **More info → Run anyway**.
