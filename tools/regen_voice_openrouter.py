@@ -45,41 +45,41 @@ SCRIPT = {
         ("caller", "Please. Don't come looking for me. And don't listen to this tape."),
     ],
     "tape2": [
-        ("boy", "The recorder is running, Father."),
-        ("priest", "Name it. Command the vessel to speak its name."),
-        ("boy", "It won't give a name. It gives a number. Sixty three."),
-        ("boy", "It lives in the wiring. It sings in the walls."),
-        ("priest", "Then we sing louder, boy. We drown it out. Everything on. "
+        ("narrator", "The recorder is running, Father."),
+        ("narrator", "Name it. Command the vessel to speak its name."),
+        ("narrator", "It won't give a name. It gives a number. Sixty three."),
+        ("narrator", "It lives in the wiring. It sings in the walls."),
+        ("narrator", "Then we sing louder, boy. We drown it out. Everything on. "
                    "Every light, every fan."),
-        ("priest", "And if it learns the room, burn the tape."),
+        ("narrator", "And if it learns the room, burn the tape."),
     ],
     "tape3": [
-        ("officer", "Sonar reports no contact. Repeat, no contact."),
-        ("sailor", "Then who is knocking on the hull."),
-        ("officer", "Depth steady. One hundred twenty meters. The water is inside of us."),
-        ("sailor", "It tapped back. Three times. That's my brother's code. "
+        ("narrator", "Sonar reports no contact. Repeat, no contact."),
+        ("narrator", "Then who is knocking on the hull."),
+        ("narrator", "Depth steady. One hundred twenty meters. The water is inside of us."),
+        ("narrator", "It tapped back. Three times. That's my brother's code. "
                    "He has been dead six years."),
-        ("officer", "Flood the compartment. Flood it. If it can hear us, "
+        ("narrator", "Flood the compartment. Flood it. If it can hear us, "
                     "it can follow us up."),
     ],
     "tape4": [
-        ("interrogator", "State your name for the record."),
-        ("archivist", "You already know my name. You played it back."),
-        ("interrogator", "Where were you on the night of the sixth."),
-        ("archivist", "In my apartment. Listening to a tape that hasn't been recorded yet."),
-        ("interrogator", "What did you do to it. The thing in the wall."),
-        ("archivist", "I turned on everything I own. And it still heard me breathing."),
+        ("narrator", "State your name for the record."),
+        ("narrator", "You already know my name. You played it back."),
+        ("narrator", "Where were you on the night of the sixth."),
+        ("narrator", "In my apartment. Listening to a tape that hasn't been recorded yet."),
+        ("narrator", "What did you do to it. The thing in the wall."),
+        ("narrator", "I turned on everything I own. And it still heard me breathing."),
     ],
     "tape5": [
-        ("archivist", "This is the room. This is you, ten seconds ago."),
-        ("archivist", "Do not look behind the desk."),
-        ("archivist", "The microwave will stop at eleven minutes."),
-        ("archivist", "I am already inside the machine. Listen."),
+        ("narrator", "This is the room. This is you, ten seconds ago."),
+        ("narrator", "Do not look behind the desk."),
+        ("narrator", "The microwave will stop at eleven minutes."),
+        ("narrator", "I am already inside the machine. Listen."),
     ],
     "entity": [
-        ("entity", "Dead air. Dead air."),
-        ("entity", "Make a sound. Make a sound."),
-        ("entity", "I am the air between the words."),
+        ("narrator", "Dead air. Dead air."),
+        ("narrator", "Make a sound. Make a sound."),
+        ("narrator", "I am the air between the words."),
     ],
 }
 
@@ -88,33 +88,17 @@ SCRIPT = {
 # accepts). `shift` is a resample ratio: it moves pitch AND formants together,
 # which is what actually changes the apparent person. `eq` adds the room.
 SPEAKERS = {
-    # 911 dispatcher: deep, unhurried, dry telephone band
+    # THE NARRATOR. One voice for tapes 2-5 and the thing on the line, so the
+    # archive sounds like one person's recordings and not a cast.
+    "narrator": {"voice": "", "shift": 1.00, "tempo": 1.00,
+                 "eq": "highpass=f=90,lowpass=f=8000,aecho=0.35:0.3:9:0.06"},
+    # Tape 1 only. Two people on one line.
+    # the 911 dispatcher: low, dry, telephone band
     "operator": {"voice": "alloy", "shift": 0.90, "tempo": 0.98,
                  "eq": "highpass=f=300,lowpass=f=3400,acompressor=threshold=0.10:ratio=4:attack=4:release=140"},
-    # the caller: much higher, fast, breathing into the mic
+    # the caller: higher, faster, breathing into the mic
     "caller": {"voice": "", "shift": 1.26, "tempo": 1.06,
                "eq": "highpass=f=320,lowpass=f=3200,acompressor=threshold=0.06:ratio=7:attack=2:release=80"},
-    # the priest: very low and slow, church tail
-    "priest": {"voice": "alloy", "shift": 0.82, "tempo": 0.92,
-               "eq": "highpass=f=80,lowpass=f=6800,aecho=0.75:0.5:55:0.22"},
-    # the altar boy: young, thin, too close to the machine
-    "boy": {"voice": "", "shift": 1.22, "tempo": 1.02,
-            "eq": "highpass=f=140,lowpass=f=6200,aecho=0.6:0.4:28:0.12"},
-    # submarine commander: clipped, level, radio
-    "officer": {"voice": "alloy", "shift": 0.92, "tempo": 1.00,
-                "eq": "highpass=f=380,lowpass=f=3000,acompressor=threshold=0.09:ratio=8:attack=3:release=70"},
-    # sonar sailor: higher, quick, frightened
-    "sailor": {"voice": "", "shift": 1.12, "tempo": 1.05,
-               "eq": "highpass=f=350,lowpass=f=3100,acompressor=threshold=0.08:ratio=7:attack=2:release=60"},
-    # YOU. the archivist: untouched, this is the voice the game gives you
-    "archivist": {"voice": "", "shift": 1.00, "tempo": 1.00,
-                  "eq": "highpass=f=90,lowpass=f=8000,aecho=0.35:0.3:9:0.06"},
-    # the interviewer: low, flat, no room at all
-    "interrogator": {"voice": "alloy", "shift": 0.84, "tempo": 0.97,
-                     "eq": "highpass=f=95,lowpass=f=7400"},
-    # the thing on the line: far below the body, stretched
-    "entity": {"voice": "alloy", "shift": 0.68, "tempo": 0.90,
-               "eq": "highpass=f=50,lowpass=f=3400,aecho=0.85:0.7:150:0.45"},
 }
 
 # kept for the probe scripts
