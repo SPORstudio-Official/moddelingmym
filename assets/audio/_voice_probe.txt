@@ -1,0 +1,7 @@
+voice probe  model=fish-audio/s2.1-pro-free:free  voice=<omitted>
+
+two takes of the same line : timbre r=0.963   median F0 152 Hz vs 153 Hz
+one take of a different line: timbre r=0.971   median F0 108 Hz
+
+r is the correlation of the two spectral envelopes (1.0 = identical timbre).
+VERDICT: same speaker, with normal take-to-take variation (delivery/timing differs, timbre matches).

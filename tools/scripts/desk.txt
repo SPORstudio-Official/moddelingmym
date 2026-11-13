@@ -1,0 +1,19 @@
+# headless smoke test: title -> briefing -> desk -> tune -> room
+frames 60
+click 320 292
+frames 240
+key 32
+frames 5
+click 45 305
+down 218 222
+move 218 192
+up
+down 218 270
+move 218 342
+up
+frames 30
+dump tuned
+shot build/shots/desk.bmp
+key 32
+frames 10
+shot build/shots/room.bmp

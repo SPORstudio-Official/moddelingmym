@@ -1,0 +1,9 @@
+build/
+node_modules/
+*.o
+*.obj
+*.pdb
+tools/frame_*.bmp
+tools/out/
+build/*.res
+-o
