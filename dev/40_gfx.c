@@ -44,7 +44,11 @@ static rect_t rect_intersect(rect_t a, rect_t b) {
     return rect_make(x0, y0, k_max(0, x1 - x0), k_max(0, y1 - y0));
 }
 
-void gfx_set_clip(rect_t r) { g_clip = r; }
+/* The clip rectangle is always intersected with the framebuffer.  A window can
+   be dragged so that its client area hangs over an edge (or is larger than the
+   screen), and every primitive treats g_clip as "safe to write" -- so the
+   screen bounds have to be part of it rather than a separate check. */
+void gfx_set_clip(rect_t r) { g_clip = rect_intersect(r, rect_make(0, 0, SCREEN_W, SCREEN_H)); }
 rect_t gfx_get_clip(void) { return g_clip; }
 void gfx_reset_clip(void) { g_clip = rect_make(0, 0, SCREEN_W, SCREEN_H); }
 void gfx_push_clip(rect_t r) { g_clip = rect_intersect(g_clip, r); }
@@ -116,6 +120,10 @@ void gfx_vline(int x, int y, int h, u32 color) {
 void gfx_fill_rect(int x, int y, int w, int h, u32 color) {
     rect_t r = rect_intersect(rect_make(x, y, w, h), g_clip);
     int yy;
+    /* belt and braces: never index the framebuffer outside its rows */
+    if (r.y < 0) { r.h += r.y; r.y = 0; }
+    if (r.y + r.h > SCREEN_H) r.h = SCREEN_H - r.y;
+    if (r.h <= 0 || r.w <= 0) return;
     if (rect_empty(&r) || ALPHA(color) == 0) return;
     if (ALPHA(color) == 255) {
         for (yy = r.y; yy < r.y + r.h; yy++) {

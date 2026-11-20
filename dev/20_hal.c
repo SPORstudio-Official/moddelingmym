@@ -160,6 +160,11 @@ void hal_request_quit(void) { g_hal_running = 0; }
  * up, click, wheel, dump <path>, sleep <ms>, quit. */
 static char g_pending[256];
 static int  g_pending_valid;
+/* The script's 'mousemove' verb carries no button information, but a real
+   pointer keeps whatever button was held down while it moves.  Tracking that
+   here is what makes dragging possible in a scripted session (paint strokes,
+   window moves, selections). */
+static int  g_script_buttons;
 
 static int script_next_line(char *out, size_t cap) {
     if (g_pending_valid) {
@@ -209,6 +214,7 @@ int hal_poll_event(hal_event_t *ev) {
     } else if (!kstrcmp(what, "mousemove")) {
         if (sscanf(line, "%*u %*s %d %d", &ev->mx, &ev->my) == 2) {
             ev->type = HAL_EV_MOUSEMOVE;
+            ev->buttons = g_script_buttons;
             return 1;
         }
     } else if (!kstrcmp(what, "click") || !kstrcmp(what, "down") || !kstrcmp(what, "up")) {
@@ -218,6 +224,7 @@ int hal_poll_event(hal_event_t *ev) {
                press (the desktop only reacts to state transitions). */
             ev->type = (what[0] == 'u') ? HAL_EV_MOUSEUP : HAL_EV_MOUSEDOWN;
             ev->buttons = (what[0] == 'u') ? 0 : 1;
+            g_script_buttons = ev->buttons;
             return 1;
         }
     } else if (!kstrcmp(what, "wheel")) {

@@ -1094,6 +1094,13 @@ void wm_on_mouse_move(int x, int y, int buttons) {
         g_wm.hover = w ? w->id : 0;
         g_wm.resize_hover = w ? wm_cursor_for_hit(wm_hit_test(w, x, y)) : 0;
         if (g_wm.resize_hover == CURSOR_ARROW) g_wm.resize_hover = 0;
+        /* While a button is held the window that received the press keeps
+           receiving the moves, even when the pointer leaves its frame: a paint
+           stroke or a drag must not stop the moment it crosses an edge. */
+        if (g_wm.mouse_down && g_wm.input_win_id) {
+            window_t *holder = wm_by_id(g_wm.input_win_id);
+            if (holder && holder->used && holder->state) w = holder;
+        }
         if (w) wm_dispatch_mouse(APP_EV_MOUSE_MOVE, x, y, buttons & 1, 0);
     }
     /* hover-driven repaint for the taskbar */
