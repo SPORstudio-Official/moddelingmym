@@ -186,19 +186,32 @@ static void sysmon_paint(void *state, window_t *w, wm_rect_t c) {
         gfx_round_rect_border(x, y, colw, 96, 6, RGBA(70, 90, 120, 180), 1);
         gfx_text(x + 8, y + 4, "allocator block chain (green = used, grey = free)", t->text_mute, 0);
         {
+            /* The bar spans the whole heap, so each block's width has to be
+               proportional to its size: dividing by a fixed constant made the
+               large free block wider than the panel and it was skipped, leaving
+               the picture showing only the first block. */
             u32 idx = 0;
             int bx = x + 8;
+            int span = colw - 16;
+            u32 heap = (u32)HEAP_SIZE;
             mm_block_t *b;
             int cy = y + 22;
-            while (mm_block_at(idx, &b) && bx < x + colw - 10) {
-                int bw = k_max(1, (int)(b->size / 4096));
-                if (bx + bw > x + colw - 8) break;
+            int drawn = 0;
+            while (mm_block_at(idx, &b)) {
+                int bw;
+                if (bx >= x + colw - 8) break;
+                bw = (int)((u64)b->size * (u32)span / heap);
+                if (bw < 1) bw = 1;               /* keep tiny blocks visible */
+                if (bx + bw > x + colw - 8) bw = x + colw - 8 - bx;
+                if (bw <= 0) break;
                 gfx_fill_rect(bx, cy, bw, 40,
                               (b->flags & MM_FLAG_FREE) ? RGBA(70, 80, 100, 220)
                                                        : RGBA(RED(t->ok), GREEN(t->ok), BLUE(t->ok), 200));
-                bx += bw + 1;
+                bx += bw;
                 idx++;
+                drawn++;
             }
+            (void)drawn;
             ksnprintf(sm->kill_msg, sizeof(sm->kill_msg),
                       "%u blocks, %u used, %u free, largest free %u B",
                       (unsigned)mm_state()->blocks_alloc + (unsigned)mm_state()->blocks_free,

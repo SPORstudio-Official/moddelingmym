@@ -1146,8 +1146,14 @@ void wm_on_mouse_down(int x, int y, int button) {
         return;
     }
 
-    /* desktop icons */
-    {
+    /* Desktop icons.
+       A window that covers an icon must win the click: testing the icons first
+       meant that any click inside a window overlapping an icon cell was
+       swallowed by the icon underneath (which is why the System Monitor's tab
+       strip did not respond while the window was placed over the desktop
+       icons).  Topmost window first, then the icon layer. */
+    w = wm_top_at(x, y);
+    if (!w) {
         int i;
         for (i = 0; i < DESKTOP_ICON_COUNT; i++) {
             wm_rect_t r = desktop_icon_rect(i);
@@ -1165,10 +1171,9 @@ void wm_on_mouse_down(int x, int y, int button) {
             }
         }
         g_wm.desktop_selected = 0;
+        return;
     }
 
-    w = wm_top_at(x, y);
-    if (!w) return;
     wm_raise(w->id);
     g_wm.focused = w->id;
     {

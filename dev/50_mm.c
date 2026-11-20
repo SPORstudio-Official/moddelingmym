@@ -240,6 +240,8 @@ void *mm_alloc_tagged(u32 size, u32 tag) {
  *      tools/debug_build.sh -DAETHER_MM_CHECK
  * -------------------------------------------------------------------------- */
 #ifdef AETHER_MM_CHECK
+static void mm_panic_freeze(void);
+
 void mm_check(const char *where) {
     mm_block_t *b = g_mm.head;
     int n = 0;
