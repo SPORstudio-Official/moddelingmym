@@ -1,0 +1,18 @@
+# Build outputs.  AetherOS.exe is deliberately NOT ignored: it is the
+# downloadable deliverable, published from dist/ so a release link can point at
+# a stable blob (GitHub's asset upload host is not reachable from every build
+# environment, including this one).
+AetherOS.pdb
+aether_os.c
+*.obj
+*.o
+/AetherOS.exe
+
+# Headless capture artifacts
+*.ppm
+*.png
+
+# Toolchain
+.zig/
+.venv/
+__pycache__/
