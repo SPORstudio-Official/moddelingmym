@@ -8,12 +8,14 @@
   "license": "MIT",
   "scripts": {
     "build:wasm": "bash tools/build_wasm.sh",
-    "start": "npm run build:wasm && electron .",
+    "build:single": "node tools/bundle_standalone.js",
+    "build": "npm run build:wasm && npm run build:single",
+    "start": "npm run build && electron .",
     "start:only": "electron .",
     "web": "node tools/serve.js",
-    "test": "node tools/host_test.js",
-    "pack": "npm run build:wasm && electron-builder --dir",
-    "dist": "npm run build:wasm && electron-builder",
+    "test": "node tools/host_test.js && node tools/bundle_test.js",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
     "fetch-electron": "node node_modules/electron/install.js"
   },
   "devDependencies": {
