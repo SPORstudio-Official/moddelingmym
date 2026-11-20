@@ -58,6 +58,57 @@ The kernel is one translation unit assembled from ordered modules in `dev/`.
   File Explorer, Code Studio editor with syntax highlighting, Hex Inspector,
   Paint Studio, Control Panel, Calculator, Program Console.
 
+## Running it on your desktop (Electron shell)
+
+The same kernel also runs inside a desktop window. `tools/build_wasm.sh`
+compiles the identical modules to a freestanding WebAssembly module, and the
+Electron shell in `app/` + `electron/` is its chassis: it provides the surface,
+the clock, input and the speaker -- the four things a real motherboard provides
+and a sandboxed wasm module cannot reach.
+
+```sh
+npm install
+npm start          # builds aether.wasm, then opens the AetherOS window
+```
+
+`npm start` rebuilds the module every time, so the window can never run a stale
+kernel. To re-open without rebuilding use `npm run start:only`.
+
+| Command | What it does |
+| --- | --- |
+| `npm run build:wasm` | Modules -> `app/aether.wasm` (freestanding wasm32) |
+| `npm start` | Build, then launch the Electron window |
+| `npm run web` | Serve the shell on <http://localhost:8080> for a plain browser |
+| `npm test` | Headless host-bridge test: boots the kernel and drives it with synthetic input |
+| `npm run dist` | Package a standalone installer with electron-builder |
+
+### How the port works
+
+No OS code knows the shell exists. Only the HAL gained a third back end, next to
+the Win32 and headless ones:
+
+- **memory** -- physical RAM is a grown region of the module's linear memory,
+  so the module's address space *is* the machine's (no `VirtualAlloc`).
+- **display** -- the compositor writes ARGB pixels into a framebuffer in that
+  same memory; the shell copies it into a canvas `ImageData` per frame.
+- **time** -- `js_now_us()` wraps `performance.now()`, and the kernel's own IRQ0
+  derives its 1 kHz ticks from it exactly as it does on Windows.
+- **input** -- DOM events are marshalled into `hal_event_t` (36 bytes, layout
+  pinned by a compile-time assertion) and decoded by the kernel's existing
+  scancode translation.
+- **frame stepping** -- a wasm module must not block its host, so the frame loop
+  was split into `aether_boot()` and `aether_frame()`. Electron calls the latter
+  from `requestAnimationFrame`; the Win32 and headless builds keep the original
+  blocking loop in `aether_main()`.
+
+### A note on the keyboard bug this fixed
+
+Sending both a key transition *and* the translated glyph made every character
+appear twice ("abc" -> "aabbcc"), because the kernel also derives a glyph from
+the scancode. The transition now carries no glyph, and the host-resolved glyph
+is authoritative -- matching Win32, where `WM_CHAR` follows `WM_KEYDOWN`. The
+Win32 and headless chassis are unaffected.
+
 ## Verification
 
 ```sh
