@@ -94,6 +94,36 @@ __attribute__((import_module("env"), import_name("js_log")))
 void js_log(const char *msg);
 __attribute__((import_module("env"), import_name("js_request_quit")))
 void js_request_quit(void);
+
+/* ---- networking ---------------------------------------------------------
+ *  The browser app needs real HTTP.  A wasm module cannot open a socket, so
+ *  the host performs the request and hands back the body.  Requests are
+ *  asynchronous in JavaScript but the kernel runs a synchronous frame loop, so
+ *  the host starts a fetch(), buffers the result, and the kernel polls:
+ *
+ *      slot = js_http_get(url)        -> id (>0), or -1 if the host refused
+ *      js_http_state(slot)            -> 0 pending, 1 done, 2 failed
+ *      js_http_status(slot)           -> HTTP status code
+ *      js_http_len(slot) / js_http_read(slot, dst, max)
+ *
+ *  Buffers are owned by the host and released by js_http_release().  The cap
+ *  keeps a huge page from exhausting the module's linear memory.
+ * ---------------------------------------------------------------------- */
+#define AETHER_HTTP_MAX_BODY (512 * 1024)
+__attribute__((import_module("env"), import_name("js_http_get")))
+int  js_http_get(const char *url);
+__attribute__((import_module("env"), import_name("js_http_state")))
+int  js_http_state(int slot);
+__attribute__((import_module("env"), import_name("js_http_status")))
+int  js_http_status(int slot);
+__attribute__((import_module("env"), import_name("js_http_len")))
+int  js_http_len(int slot);
+__attribute__((import_module("env"), import_name("js_http_read")))
+int  js_http_read(int slot, void *dst, int max);
+__attribute__((import_module("env"), import_name("js_http_release")))
+void js_http_release(int slot);
+__attribute__((import_module("env"), import_name("js_open_external")))
+void js_open_external(const char *url);
 #endif
 
 #define AETHER_VERSION_MAJOR 1
@@ -129,6 +159,23 @@ void js_request_quit(void);
  *  Shared logging / panic
  * -------------------------------------------------------------------------- */
 #define LOG_BUF_SIZE (64 * 1024)
+
+/* Networking (20_hal.c).  net_fetch downloads a URL into dst, NUL-terminates it
+   and returns the byte count, or a negative NET_ERR_* code. */
+enum {
+    NET_ERR_UNSUPPORTED = -1,
+    NET_ERR_TIMEOUT     = -2,
+    NET_ERR_IO          = -3,
+    NET_ERR_TOO_BIG     = -4
+};
+int net_available(void);
+/* Blocking form: fine during boot, unsafe once the frame loop is running. */
+int net_fetch(const char *url, char *dst, int cap);
+/* Non-blocking form used by the browser: start, poll each frame, finish. */
+int net_begin(const char *url);
+int net_poll(int slot);
+int net_finish(int slot, char *dst, int cap);
+void net_abort(int slot);
 
 /* --------------------------------------------------------------------------
  *  Colors (0xAARRGGBB, straight alpha)
@@ -182,6 +229,8 @@ int    kvsnprintf(char *buf, size_t n, const char *fmt, va_list ap);
 int    kstrnicmp(const char *a, const char *b, size_t n);
 char  *kstrchr(const char *s, int c);
 char  *kstrrchr(const char *s, int c);
+const char *kstrstr(const char *haystack, const char *needle);
+char  *kstrncat(char *d, const char *s, size_t n);
 void   kstrlower(char *s);
 u32    krandom(void);
 void   krand_seed(u32 s);

@@ -536,4 +536,5 @@ int aether_wasm_h(void) { return SCREEN_H; }
    refused to boot instead of failing silently. */
 __attribute__((export_name("aether_last_error")))
 int aether_wasm_error(void) { return g_aether_boot_error; }
+
 #endif

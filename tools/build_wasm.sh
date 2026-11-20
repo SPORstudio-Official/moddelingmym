@@ -54,6 +54,8 @@ MODULES=(
   dev/91_app_settings.c
   dev/92_app_calc.c
   dev/93_app_console.c
+  dev/74_html.c
+  dev/94_app_browser.c
   dev/95_main.c
 )
 

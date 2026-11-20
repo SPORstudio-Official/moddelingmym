@@ -10,7 +10,7 @@ OUT=/tmp/aether_hl.c
            dev/70_bytecode.c dev/75_registry.c dev/80_wm.c dev/85_app_sh.c \
            dev/86_app_sysmon.c dev/87_app_explorer.c dev/88_app_edit.c \
            dev/89_app_hexview.c dev/90_app_paint.c dev/91_app_settings.c \
-           dev/92_app_calc.c dev/93_app_console.c dev/95_main.c; do
+           dev/92_app_calc.c dev/93_app_console.c dev/74_html.c dev/94_app_browser.c dev/95_main.c; do
     echo "/* ---- $f ---- */"
     cat "$f"
   done

@@ -39,6 +39,15 @@ const AetherHost = (() => {
   let buttons = 0;          // 1 left, 2 right, 4 middle
   let beepCtx = null;
 
+  /* Decode a NUL-terminated string out of the module's memory. */
+  function cstr(ptr) {
+    if (!ptr || !inst) return '';
+    const mem = new Uint8Array(inst.memory.buffer);
+    let s = '';
+    for (let i = ptr; i < mem.length && mem[i]; i++) s += String.fromCharCode(mem[i]);
+    return s;
+  }
+
   /* ---- event queue ------------------------------------------------------ */
   function push(ev) {
     if (queue.length >= MAX_QUEUE) queue.shift();
@@ -179,7 +188,46 @@ const AetherHost = (() => {
     });
   }
 
-  /* ---- the seven imports ------------------------------------------------ */
+  /* ---- networking -------------------------------------------------------
+   *  The kernel runs a synchronous frame loop and cannot await, so each fetch
+   *  is started here and parked in a slot; the kernel polls the slot and copies
+   *  the body out when it is ready.  Slots are released by the kernel.
+   * -------------------------------------------------------------------- */
+  const httpSlots = new Map();
+  let httpNextSlot = 1;
+
+  function httpSpawn(url) {
+    const id = httpNextSlot++;
+    const slot = { state: 0, status: 0, body: new Uint8Array(0), url };
+    httpSlots.set(id, slot);
+    (async () => {
+      try {
+        const resp = await fetch(url, {
+          method: 'GET',
+          redirect: 'follow',
+          /* Identify honestly: some sites refuse unknown agents, but pretending
+             to be a full browser to a site that serves us text would be worse. */
+          headers: { 'Accept': 'text/html,text/plain;q=0.9,*/*;q=0.5' },
+        });
+        slot.status = resp.status;
+        const buf = await resp.arrayBuffer();
+        slot.body = new Uint8Array(buf);
+        slot.state = 1;
+      } catch (err) {
+        slot.error = String(err && err.message || err);
+        slot.state = 2;
+      }
+    })();
+    return id;
+  }
+
+  function httpGet(id) {
+    if (id <= 0) return null;
+    const s = httpSlots.get(id);
+    return s || null;
+  }
+
+  /* ---- the imports ------------------------------------------------------ */
   function makeImports(el) {
     return {
       env: {
@@ -263,6 +311,46 @@ const AetherHost = (() => {
 
         js_request_quit() {
           console.log('[aether] kernel requested shutdown');
+        },
+
+        /* ---- networking ------------------------------------------------- */
+        js_http_get(ptr) {
+          const url = cstr(ptr);
+          if (!/^https?:\/\//i.test(url)) return -1;
+          return httpSpawn(url);
+        },
+
+        js_http_state(id) {
+          const s = httpGet(id);
+          return s ? s.state : 2;
+        },
+
+        js_http_status(id) {
+          const s = httpGet(id);
+          return s ? s.status : 0;
+        },
+
+        js_http_len(id) {
+          const s = httpGet(id);
+          return s ? s.body.length : 0;
+        },
+
+        js_http_read(id, dst, max) {
+          const s = httpGet(id);
+          if (!s || dst <= 0 || max <= 0) return 0;
+          const n = Math.min(max, s.body.length);
+          new Uint8Array(inst.memory.buffer, dst, n).set(s.body.subarray(0, n));
+          return n;
+        },
+
+        js_http_release(id) {
+          httpSlots.delete(id);
+        },
+
+        js_open_external(ptr) {
+          const url = cstr(ptr);
+          console.log('[aether] open external:', url);
+          window.open(url, '_blank', 'noopener');
         },
       },
     };

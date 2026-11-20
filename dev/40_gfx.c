@@ -499,6 +499,14 @@ static const unsigned char *ui_adv(int size) {
 static int ui_w(int size) { return size == 0 ? UI_FONT_0_W : (size == 1 ? UI_FONT_1_W : UI_FONT_2_W); }
 static int ui_h(int size) { return size == 0 ? UI_FONT_0_H : (size == 1 ? UI_FONT_1_H : UI_FONT_2_H); }
 
+/* Width of a single ASCII character in the given text size.  Used by the HTML
+   layout to wrap text without having to walk a whole string for every word. */
+int gfx_char_w(int ch, int size) {
+    if (ch < 32) ch = '?';
+    if (ch >= 127) ch = '?';
+    return ui_adv(size)[ch - 32];
+}
+
 int gfx_text_w(const char *s, int size) {
     int w = 0;
     while (s && *s) {
@@ -835,7 +843,7 @@ enum {
     ICON_PANIC, ICON_SETTINGS, ICON_POWER, ICON_TERMINAL, ICON_CODE,
     ICON_FILES, ICON_BACK, ICON_PAINT, ICON_HEX, ICON_TXT, ICON_C,
     ICON_BIN, ICON_PROC, ICON_CALC, ICON_FWD, ICON_UP, ICON_DOC,
-    ICON_CLOSE, ICON_CHECK
+    ICON_CLOSE, ICON_CHECK, ICON_BROWSER
 };
 
 void gfx_draw_icon_size(int kind, int x, int y, int size) {
@@ -1003,6 +1011,15 @@ void gfx_draw_icon_size(int kind, int x, int y, int size) {
         gfx_fill_circle_aa(PX(16), PY(16), PS(11), RGB(40, 70, 100));
         gfx_circle(PX(16), PY(16), PS(11), RGB(110, 200, 240));
         gfx_text(PX(11), PY(11), "p", RGB(200, 235, 255), 1);
+        break;
+    }
+    case ICON_BROWSER: {
+        /* a globe: filled sphere, equator and one meridian */
+        gfx_fill_circle_aa(PX(16), PY(16), PS(13), RGB(34, 96, 158));
+        gfx_circle(PX(16), PY(16), PS(13), RGB(150, 214, 255));
+        gfx_line(PX(3), PY(16), PX(29), PY(16), RGB(190, 232, 255));
+        gfx_circle(PX(16), PY(16), PS(7), RGB(190, 232, 255));
+        gfx_fill_rect(PX(15), PY(4), PS(2), PS(24), RGB(190, 232, 255));
         break;
     }
     case ICON_CALC: {

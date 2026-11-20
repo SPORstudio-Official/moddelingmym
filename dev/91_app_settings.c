@@ -59,33 +59,40 @@ static void settings_paint(void *state, window_t *w, wm_rect_t c) {
         case 0: {
             gfx_text(x, y, "Wallpaper", t->text_mute, 0);
             y += 20;
-            for (i = 0; i < 4; i++) {
-                int tw = (cw - 30) / 4;
-                int th = 62;
-                int tx = x + i * (tw + 10);
+            for (i = 0; i < wallpaper_count(); i++) {
+                int percol = 3;
+                int tw = (cw - 20) / percol;
+                int th = 54;
+                int tx = x + (i % percol) * (tw + 10);
+                int row = i / percol;
                 int active = wallpaper_index() == i;
+                int sy = y + row * (th + 20);
                 int hover = (g_wm.mouse_px >= tx && g_wm.mouse_px < tx + tw &&
-                             g_wm.mouse_py >= y && g_wm.mouse_py < y + th);
+                             g_wm.mouse_py >= sy && g_wm.mouse_py < sy + th);
                 /* preview: tiny procedural swatch */
-                if (i == 0) gfx_fill_rect(tx, y, tw, th, RGB(10, 18, 32));
-                else if (i == 1) gfx_fill_rect(tx, y, tw, th, RGB(16, 18, 40));
-                else if (i == 2) gfx_fill_rect(tx, y, tw, th, RGB(44, 48, 54));
-                else gfx_fill_rect(tx, y, tw, th, RGB(60, 16, 60));
+                if (i == 5) gfx_fill_rect(tx, sy, tw, th, desktop_cfg()->solid);
+                else if (i == 4) { gfx_fill_rect(tx, sy, tw, th, RGB(6, 20, 24));
+                    gfx_fill_circle(tx + tw / 2, sy + th / 2, 14, RGBA(40, 200, 170, 90));
+                    gfx_fill_circle(tx + tw / 3, sy + th / 2, 10, RGBA(50, 140, 230, 90)); }
+                else if (i == 0) gfx_fill_rect(tx, sy, tw, th, RGB(10, 18, 32));
+                else if (i == 1) gfx_fill_rect(tx, sy, tw, th, RGB(16, 18, 40));
+                else if (i == 2) gfx_fill_rect(tx, sy, tw, th, RGB(44, 48, 54));
+                else gfx_fill_rect(tx, sy, tw, th, RGB(60, 16, 60));
                 if (i == 0) {
                     int k;
-                    for (k = 0; k < 6; k++) gfx_hline(tx, y + 10 + k * 9, tw, RGBA(60, 180, 240, 50));
+                    for (k = 0; k < 5; k++) gfx_hline(tx, sy + 9 + k * 9, tw, RGBA(60, 180, 240, 50));
                 } else if (i == 1) {
-                    gfx_fill_circle(tx + tw / 2, y + th / 2, 18, RGBA(90, 120, 240, 90));
-                    gfx_fill_circle(tx + tw / 3, y + th / 3, 12, RGBA(180, 70, 220, 80));
+                    gfx_fill_circle(tx + tw / 2, sy + th / 2, 16, RGBA(90, 120, 240, 90));
+                    gfx_fill_circle(tx + tw / 3, sy + th / 3, 10, RGBA(180, 70, 220, 80));
                 } else if (i == 3) {
-                    gfx_fill_circle(tx + tw / 2, y + th / 2, 16, RGBA(255, 190, 70, 200));
-                    gfx_fill_rect(tx, y + th - 12, tw, 12, RGBA(180, 20, 90, 200));
+                    gfx_fill_circle(tx + tw / 2, sy + th / 2, 14, RGBA(255, 190, 70, 200));
+                    gfx_fill_rect(tx, sy + th - 10, tw, 10, RGBA(180, 20, 90, 200));
                 }
-                if (active) gfx_round_rect_border(tx - 2, y - 2, tw + 4, th + 4, 4, t->accent, 2);
-                else if (hover) gfx_round_rect_border(tx, y, tw, th, 3, t->border_hi, 1);
-                gfx_text_center(tx + tw / 2, y + th + 4, wallpaper_name(i), t->text_dim, 0);
+                if (active) gfx_round_rect_border(tx - 2, sy - 2, tw + 4, th + 4, 4, t->accent, 2);
+                else if (hover) gfx_round_rect_border(tx, sy, tw, th, 3, t->border_hi, 1);
+                gfx_text_center(tx + tw / 2, sy + th + 3, wallpaper_name(i), t->text_dim, 0);
             }
-            y += 92;
+            y += 2 * 74 + 8;
             gfx_text(x, y, "Colour theme", t->text_mute, 0);
             y += 20;
             for (i = 0; i < 4; i++) {
@@ -286,12 +293,15 @@ static void settings_mouse(void *state, int event, int x, int y, int button, int
         int gx0 = c.x + 14;
         int wy = c.y + 68;
         int i;
-        if (y >= wy && y < wy + 62) {
-            for (i = 0; i < 4; i++) {
-                int tw = (cw - 30) / 4;
-                int tx = gx0 + i * (tw + 10);
-                if (x >= tx && x < tx + tw) {
-                    wallpaper_set(i);
+        if (y >= wy && y < wy + 2 * 74) {
+            for (i = 0; i < wallpaper_count(); i++) {
+                int percol = 3;
+                int tw = (cw - 20) / percol;
+                int th = 54;
+                int tx = gx0 + (i % percol) * (tw + 10);
+                int sy = wy + (i / percol) * (th + 20);
+                if (x >= tx && x < tx + tw && y >= sy && y < sy + th) {
+                    desktop_set_wallpaper(i);
                     ksnprintf(s->status, sizeof(s->status), "wallpaper set to %s", wallpaper_name(i));
                     s->status_kind = 1;
                     return;
@@ -299,13 +309,13 @@ static void settings_mouse(void *state, int event, int x, int y, int button, int
             }
         }
         {
-            int ty = wy + 112;
+            int ty = wy + 2 * 74 + 36;
             if (y >= ty && y < ty + 34) {
                 for (i = 0; i < 4; i++) {
                     int tw = (cw - 30) / 4;
                     int tx = gx0 + i * (tw + 10);
                     if (x >= tx && x < tx + tw) {
-                        theme_apply(i);
+                        desktop_set_theme(i);
                         ksnprintf(s->status, sizeof(s->status), "theme applied: %s", theme_name(i));
                         s->status_kind = 1;
                         return;
@@ -314,7 +324,7 @@ static void settings_mouse(void *state, int event, int x, int y, int button, int
             }
             ty += 50;
             if (y >= ty && y < ty + 26) {
-                gfx_set_scanlines(!gfx_scanlines_enabled());
+                desktop_set_crt(!gfx_scanlines_enabled());
                 ksnprintf(s->status, sizeof(s->status), "CRT shader %s",
                           gfx_scanlines_enabled() ? "enabled" : "disabled");
                 s->status_kind = 1;

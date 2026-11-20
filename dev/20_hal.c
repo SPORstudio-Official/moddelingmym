@@ -759,6 +759,83 @@ int hal_poll_event(hal_event_t *ev) {
 #endif /* AETHER_HEADLESS */
 
 /* -------------------------------------------------------------------------- */
+/*  Networking                                                               */
+/*                                                                            */
+/*  A kernel module asks the chassis for bytes; how they are obtained is the   */
+/*  chassis' problem.  Only the WebAssembly shell has a network (the host      */
+/*  performs the request), so the Win32 and headless back ends report           */
+/*  NET_ERR_UNSUPPORTED and callers fall back to local content.                */
+/* -------------------------------------------------------------------------- */
+
+int net_available(void) {
+#ifdef AETHER_WASM
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+#ifdef AETHER_WASM
+/* Start a request.  Returns a slot id, or NET_ERR_*.  Deliberately does NOT
+ * wait: the wasm module shares a thread with the shell's UI, so blocking here
+ * would freeze the window for as long as the network took.  Callers poll. */
+int net_begin(const char *url) {
+    return js_http_get(url);
+}
+
+/* 0 = still waiting, 1 = ready to read, negative NET_ERR_* = failed. */
+int net_poll(int slot) {
+    int state = js_http_state(slot);
+    if (state == 0) return 0;
+    if (state == 2) return NET_ERR_IO;
+    return 1;
+}
+
+/* Copy the finished body out and release the slot.  Returns the byte count, or
+ * a negative NET_ERR_* code. */
+int net_finish(int slot, char *dst, int cap) {
+    int len = js_http_len(slot);
+    if (len > AETHER_HTTP_MAX_BODY || len > cap) {
+        js_http_release(slot);
+        return NET_ERR_TOO_BIG;
+    }
+    if (len > 0) js_http_read(slot, dst, len);
+    dst[len > 0 ? len : 0] = 0;
+    js_http_release(slot);
+    return len;
+}
+
+void net_abort(int slot) { js_http_release(slot); }
+
+/* Blocking convenience wrapper.  Only safe before the frame loop is running
+ * (i.e. during boot); the browser app uses the three-call form instead. */
+int net_fetch(const char *url, char *dst, int cap) {
+    int slot = net_begin(url);
+    u64 deadline;
+    if (slot <= 0) return slot;
+    deadline = now_us() + 20000000ULL;
+    while (now_us() < deadline) {
+        int r = net_poll(slot);
+        if (r != 0) {
+            if (r < 0) { net_abort(slot); return r; }
+            return net_finish(slot, dst, cap);
+        }
+    }
+    net_abort(slot);
+    return NET_ERR_TIMEOUT;
+}
+#else
+int net_begin(const char *url) { (void)url; return NET_ERR_UNSUPPORTED; }
+int net_poll(int slot) { (void)slot; return NET_ERR_UNSUPPORTED; }
+int net_finish(int slot, char *dst, int cap) { (void)slot; (void)dst; (void)cap; return NET_ERR_UNSUPPORTED; }
+void net_abort(int slot) { (void)slot; }
+int net_fetch(const char *url, char *dst, int cap) {
+    (void)url; (void)dst; (void)cap;
+    return NET_ERR_UNSUPPORTED;
+}
+#endif
+
+/* -------------------------------------------------------------------------- */
 /*  Common HAL helpers                                                       */
 /* -------------------------------------------------------------------------- */
 

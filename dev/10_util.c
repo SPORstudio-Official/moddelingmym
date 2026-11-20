@@ -129,6 +129,24 @@ char *kstrchr(const char *s, int c) {
     return (c == 0) ? (char *)s : NULL;
 }
 
+const char *kstrstr(const char *h, const char *n) {
+    size_t nl = kstrlen(n);
+    if (!nl) return h;
+    while (*h) {
+        if (*h == *n && !kstrncmp(h, n, nl)) return h;
+        h++;
+    }
+    return NULL;
+}
+
+char *kstrncat(char *d, const char *s, size_t n) {
+    size_t dl = kstrlen(d);
+    size_t i = 0;
+    while (i < n && s[i]) { d[dl + i] = s[i]; i++; }
+    d[dl + i] = 0;
+    return d;
+}
+
 char *kstrrchr(const char *s, int c) {
     const char *last = NULL;
     if (!s) return NULL;

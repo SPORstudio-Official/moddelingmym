@@ -433,6 +433,7 @@ static const desktop_icon_t g_desktop_icons[] = {
     { "sysmon",   "Sys Monitor", 3 },
     { "hexview",  "Hex Viewer", 13 },
     { "paint",    "Paint",     12 },
+    { "browser",  "Browser",   ICON_BROWSER },
     { "settings", "Settings",  6  }
 };
 #define DESKTOP_ICON_COUNT ((int)(sizeof(g_desktop_icons) / sizeof(g_desktop_icons[0])))
@@ -563,6 +564,35 @@ static void paint_wallpaper(void) {
         for (i = 0; i < SCREEN_H; i += 4) gfx_hline(0, i, SCREEN_W, RGBA(255, 255, 255, 6));
         for (i = 0; i < SCREEN_W; i += 4) gfx_vline(i, 0, SCREEN_H - WM_TASKBAR, RGBA(0, 0, 0, 8));
         gfx_radial_glow(SCREEN_W / 2, SCREEN_H / 3, 560, RGBA(200, 220, 255, 22));
+        break;
+    }
+    case 4: { /* aurora drift */
+        gfx_gradient_v(0, 0, SCREEN_W, SCREEN_H - WM_TASKBAR, RGB(4, 12, 16), RGB(8, 30, 34));
+        gfx_radial_glow(260, 180, 460, RGBA(40, 220, 170, 70));
+        gfx_radial_glow(820, 320, 520, RGBA(40, 140, 230, 60));
+        gfx_radial_glow(560, 90, 380, RGBA(150, 60, 230, 45));
+        /* vertical curtains */
+        for (i = 0; i < SCREEN_W; i += 3) {
+            int h = 120 + (int)(88 * k_sin((double)i / 90.0)) + (int)(40 * k_sin((double)i / 31.0));
+            int a = 14 + (int)(10 * k_sin((double)i / 140.0));
+            if (a < 4) a = 4;
+            gfx_vline(i, h, SCREEN_H - WM_TASKBAR, RGBA(40, 200, 170, a));
+        }
+        for (i = 0; i < 260; i++) {
+            int x = (int)(krandom() % SCREEN_W);
+            int y = (int)(krandom() % (SCREEN_H - WM_TASKBAR));
+            int b = 60 + (int)(krandom() % 180);
+            gfx_pixel(x, y, RGBA(b, b, b, b / 2));
+        }
+        break;
+    }
+    case 5: { /* solid user colour */
+        u32 c = desktop_cfg()->solid;
+        /* A subtle vertical shade keeps icons legible on any flat colour. */
+        gfx_fill_rect(0, 0, SCREEN_W, SCREEN_H - WM_TASKBAR, c);
+        gfx_gradient_v(0, 0, SCREEN_W, SCREEN_H - WM_TASKBAR,
+                       RGBA(255, 255, 255, 10), RGBA(0, 0, 0, 46));
+        gfx_radial_glow(SCREEN_W / 2, SCREEN_H / 3, 600, RGBA(255, 255, 255, 10));
         break;
     }
     default: { /* synthwave */
@@ -1336,7 +1366,10 @@ void wm_init(void) {
     g_wm.focused = 0;
     g_wm.start_page = 0;
     g_wm_power_off_ms = 0;
-    theme_apply(0);
+    /* Restore the user's desktop preferences from /etc/desktop.cfg.  This also
+       applies the saved theme, wallpaper, accent colour and CRT setting, so a
+       machine comes back exactly as it was left. */
+    desktop_cfg_load();
     g_compositor_pid = (int)proc_spawn("compositor", 1, 24, PROC_FLAG_KERNEL | PROC_FLAG_GUI, 0);
     {
         pcb_t *cp = proc_pcb((u32)g_compositor_pid);

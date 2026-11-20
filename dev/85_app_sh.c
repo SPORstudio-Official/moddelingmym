@@ -156,6 +156,9 @@ static void cmd_help(shell_t *sh) {
         "  PROCESS/MEMORY  ps   top   kill <pid>   free   memmap   spawn <app>\n"
         "                  uptime   uname -a   dmesg   syscalls   irq\n"
         "  COMPILER        cc <src.c> [-o <out>]   run <prog>   disasm <src.c>\n"
+        "  CUSTOMISE       theme <0-3>  wallpaper <0-5>  accent <rrggbb|off>\n"
+        "                  font <0-2>   crt <0|1>   customise   resetprefs\n"
+        "  WEB             browser [url]   (also: web <url>)\n"
         "  SYSTEM          clear   theme <0-3>   wallpaper <0-3>   reboot   panic\n"
         "                  help    apps   about   exit\n");
 }
@@ -770,9 +773,75 @@ static int cmd_execute(shell_t *sh, char *line) {
     }
     if (!kstrcmp(cmd, "theme")) {
         int idx = argc > 1 ? katoi(argv[1]) : (theme_index() + 1) % 4;
-        theme_apply(idx);
-        sh_printf(sh, TC_GREEN, "theme %d: %s\n", theme_index(), theme_get()->name);
+        desktop_set_theme(idx);
+        sh_printf(sh, TC_GREEN, "theme %d: %s  (saved)\n", theme_index(), theme_get()->name);
         notify(theme_get()->name);
+        return 0;
+    }
+    if (!kstrcmp(cmd, "accent")) {
+        /* accent [rrggbb | off] -- picks the highlight colour every app uses */
+        if (argc < 2) {
+            sh_printf(sh, TC_GREY, "accent is %s\n",
+                      desktop_cfg()->accent ? "custom" : "from the theme");
+            return 0;
+        }
+        if (!kstrcmp(argv[1], "off")) {
+            desktop_set_accent(0, 0);
+            sh_emit(sh, TC_GREEN, "accent follows the theme again\n");
+            return 0;
+        }
+        {
+            int ok = 0;
+            u32 v = kstrtoul(argv[1][0] == '#' ? argv[1] + 1 : argv[1], 16, &ok);
+            if (!ok) { sh_emit(sh, TC_RED, "accent: expected a hex colour like 4fc3f7\n"); return 0; }
+            desktop_set_accent(1, v);
+            sh_printf(sh, TC_GREEN, "accent set to #%06x (saved)\n", (unsigned)v);
+        }
+        return 0;
+    }
+    if (!kstrcmp(cmd, "fontscale") || !kstrcmp(cmd, "font")) {
+        int i = argc > 1 ? katoi(argv[1]) : (desktop_cfg()->font_scale + 1) % 3;
+        static const char *names[3] = { "compact", "normal", "large" };
+        desktop_set_font_scale(i);
+        sh_printf(sh, TC_GREEN, "interface scale: %s (saved)\n", names[desktop_cfg()->font_scale]);
+        return 0;
+    }
+    if (!kstrcmp(cmd, "crt")) {
+        desktop_set_crt(argc > 1 ? katoi(argv[1]) : !gfx_scanlines_enabled());
+        sh_printf(sh, TC_GREEN, "CRT shader %s (saved)\n",
+                  gfx_scanlines_enabled() ? "on" : "off");
+        return 0;
+    }
+    if (!kstrcmp(cmd, "customise") || !kstrcmp(cmd, "customize") || !kstrcmp(cmd, "prefs")) {
+        desktop_cfg_t *c = desktop_cfg();
+        sh_emit(sh, TC_CYAN, "current desktop settings (/etc/desktop.cfg)\n");
+        sh_printf(sh, TC_GREY, "  theme         %d  %s\n", c->theme, theme_name(c->theme));
+        sh_printf(sh, TC_GREY, "  wallpaper     %d  %s\n", c->wallpaper, wallpaper_name(c->wallpaper));
+        sh_printf(sh, TC_GREY, "  accent        %s #%06x\n", c->accent ? "custom" : "theme ",
+                  (unsigned)(c->accent ? c->accent_color : theme_get()->accent));
+        sh_printf(sh, TC_GREY, "  font scale    %d  (0 compact, 1 normal, 2 large)\n", c->font_scale);
+        sh_printf(sh, TC_GREY, "  CRT shader    %s\n", gfx_scanlines_enabled() ? "on" : "off");
+        sh_printf(sh, TC_GREY, "  transparency  %d%%\n", c->transparency);
+        sh_emit(sh, TC_GREY, "  change with: theme N  wallpaper N  accent RRGGBB  crt 0|1  font 0-2\n");
+        sh_emit(sh, TC_GREY, "  reset      : resetprefs\n");
+        return 0;
+    }
+    if (!kstrcmp(cmd, "resetprefs")) {
+        desktop_reset();
+        sh_emit(sh, TC_GREEN, "desktop settings restored to defaults\n");
+        notify("Settings reset");
+        return 0;
+    }
+    if (!kstrcmp(cmd, "browser") || !kstrcmp(cmd, "web")) {
+        const app_desc_t *d = app_by_id("browser");
+        if (!d) { sh_emit(sh, TC_RED, "browser: not registered\n"); return 0; }
+        if (argc > 1) {
+            wm_open_app(d, argv[1]);
+            sh_printf(sh, TC_GREEN, "opening %s\n", argv[1]);
+        } else {
+            wm_open_app(d, NULL);
+            sh_emit(sh, TC_GREEN, "opening the browser\n");
+        }
         return 0;
     }
     if (!kstrcmp(cmd, "wallpaper")) {

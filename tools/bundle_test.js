@@ -42,6 +42,23 @@ check('no external src/href attributes',
 check('no absolute URLs in markup',
   !/https?:\/\//i.test(bare));
 
+/* Every wasm import must have a host implementation.  If the kernel grows an
+   import and the shell does not provide it, instantiation fails at load time
+   with a link error -- the kind of breakage that only shows up when you open
+   the file, so check it here instead. */
+{
+  const wasmPath = path.join(ROOT, 'app', 'aether.wasm');
+  if (fs.existsSync(wasmPath)) {
+    const mod = new WebAssembly.Module(fs.readFileSync(wasmPath));
+    const needed = WebAssembly.Module.imports(mod).map((i) => i.name);
+    const hostSrc = html;
+    const missing = needed.filter((n) => hostSrc.indexOf(n + '(') < 0);
+    check('every wasm import is provided by the shell', missing.length === 0,
+      missing.join(', '));
+    console.log('       (' + needed.length + ' imports checked)');
+  }
+}
+
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
 check('three inline script blocks (loader, host, boot)', scripts.length === 3,
   scripts.length + ' found');
