@@ -1,0 +1,58 @@
+{
+  "name": "aetheros",
+  "version": "1.0.0",
+  "description": "AetherOS -- a complete 32-bit operating system that boots inside a single desktop window",
+  "main": "electron/main.js",
+  "private": true,
+  "author": "SPORstudio",
+  "license": "MIT",
+  "scripts": {
+    "build:wasm": "bash tools/build_wasm.sh",
+    "start": "npm run build:wasm && electron .",
+    "start:only": "electron .",
+    "web": "node tools/serve.js",
+    "test": "node tools/host_test.js",
+    "pack": "npm run build:wasm && electron-builder --dir",
+    "dist": "npm run build:wasm && electron-builder",
+    "fetch-electron": "node node_modules/electron/install.js"
+  },
+  "devDependencies": {
+    "electron": "^32.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "studio.spor.aetheros",
+    "productName": "AetherOS",
+    "files": [
+      "electron/**/*",
+      "app/index.html",
+      "app/style.css",
+      "app/boot.js",
+      "app/aether-host.js",
+      "app/aether.wasm"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "AetherOS"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
+  }
+}
