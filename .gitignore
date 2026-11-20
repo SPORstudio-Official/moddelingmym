@@ -1,0 +1,16 @@
+# Build outputs
+AetherOS.exe
+AetherOS.pdb
+aether_os.c
+*.obj
+*.o
+*.exe
+
+# Headless capture artifacts
+*.ppm
+*.png
+
+# Toolchain
+.zig/
+.venv/
+__pycache__/
