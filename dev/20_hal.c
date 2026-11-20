@@ -43,17 +43,151 @@ u32 *g_vram = NULL;
 
 static u64 g_host_t0;
 static int g_hal_running;
-#ifdef AETHER_ON_WIN32
+#if defined(AETHER_ON_WIN32) || defined(AETHER_WASM)
 static u64 g_host_freq;
+#endif
+#ifdef AETHER_ON_WIN32
 static int g_hal_mouse_buttons;
 #endif
 
 machine_t g_machine;
 
 /* -------------------------------------------------------------------------- */
+/*  WebAssembly chassis                                                       */
+/*                                                                            */
+/*  The module owns its own linear memory, and physical RAM is simply a slice  */
+/*  of it: there is no VirtualAlloc to call, so the memory *is* the machine's   */
+/*  address space.  The host provides the clock, presents the framebuffer to a */
+/*  canvas and collects input; everything else is the kernel's own code.       */
+/* -------------------------------------------------------------------------- */
+#if defined(AETHER_WASM)
+
+/* Grow linear memory by `pages` and return the byte address of the new region.
+   memory.grow yields the previous page count, so the start of the fresh block is
+   exactly that many pages into the address space. */
+static void *hal_wasm_alloc_pages(u32 pages) {
+    u32 prev = (u32)__builtin_wasm_memory_grow(0, (size_t)pages);
+    if (prev == 0xFFFFFFFFu) return NULL;
+    return (void *)(size_t)((u64)prev * 65536ULL);
+}
+
+#define HAL_QUEUE_MAX 256
+static hal_event_t g_evq[HAL_QUEUE_MAX];
+static int g_ev_head, g_ev_tail;
+static int g_wasm_mouse_buttons;
+
+/* The event struct crosses the boundary as raw little-endian bytes, so the
+   shell only needs to agree on the field offsets.  Layout on wasm32:
+   9 x 4-byte fields = 36 bytes (type, key, ch, mx, my, wheel, buttons,
+   repeat, time_ms).
+
+   A compiled-in assertion catches any future edit to hal_event_t that would
+   silently desynchronise the shell's writer. */
+#define HAL_EVENT_BYTES 36
+typedef char hal_event_size_check[(sizeof(hal_event_t) == HAL_EVENT_BYTES) ? 1 : -1];
+
+static void ev_push(const hal_event_t *e) {
+    int next = (g_ev_head + 1) % HAL_QUEUE_MAX;
+    if (next == g_ev_tail) return;              /* queue full: drop */
+    g_evq[g_ev_head] = *e;
+    g_ev_head = next;
+}
+
+int hal_init(void) {
+    g_wasm_mouse_buttons = 0;
+    g_ev_head = g_ev_tail = 0;
+
+    /* Physical RAM: a stable 64 MB region of the module's linear memory.  It is
+       zeroed by the wasm runtime when the memory is first grown, so unlike the
+       Win32 chassis there is nothing to memset.
+
+       memory.grow returns the *previous page count* (or -1), not an address, so
+       the base of the new region is that count times the 64 KiB page size. */
+    g_phys_ram = hal_wasm_alloc_pages(PHYS_RAM_SIZE / 65536);
+    if (!g_phys_ram) return -1;
+
+    /* Framebuffer: plain ARGB pixels, one u32 per pixel, drawn by the host. */
+    g_vram = (u32 *)hal_wasm_alloc_pages((VRAM_PITCH * SCREEN_H * 4 + 65535) / 65536);
+    if (!g_vram) return -1;
+
+    g_host_t0 = js_now_us();
+    g_host_freq = 1000000ULL;                   /* js_now_us is microseconds */
+    g_hal_running = 1;
+
+    kmemset(&g_machine, 0, sizeof(g_machine));
+    g_machine.magic = 0x41455448u;
+    g_machine.width = SCREEN_W;
+    g_machine.height = SCREEN_H;
+    g_machine.pitch = VRAM_PITCH;
+    g_machine.bpp = 32;
+    g_machine.total_ram = PHYS_RAM_SIZE;
+    g_machine.kernel_bytes = KERNEL_SIZE;
+    g_machine.heap_bytes = HEAP_SIZE;
+    g_machine.disk_bytes = DISK_SIZE;
+    g_machine.cpu_mhz = 2400;
+    kstrcpy(g_machine.cpu_name, "Aether Virtual CPU (webassembly)");
+    kstrcpy(g_machine.host_os, "web");
+    js_set_title("AetherOS");
+    return 0;
+}
+
+void hal_shutdown(void) {
+    g_hal_running = 0;
+}
+
+int  hal_running(void) { return g_hal_running; }
+u32 *hal_vram(void) { return g_vram; }
+
+void hal_set_title(const char *t) { js_set_title(t); }
+
+/* A wasm module must not block its host: the shell already paces frames with
+   requestAnimationFrame, so sleeping is a no-op here. */
+void hal_sleep_ms(int ms) { (void)ms; }
+
+/* Presentation is a single call into the shell, which copies the framebuffer
+   into an ImageData and paints it.  The rect arguments are ignored: the host
+   always blits the whole 1280x720 surface. */
+void hal_present(int x, int y, int w, int h) {
+    (void)x; (void)y; (void)w; (void)h;
+    js_present();
+}
+
+void hal_flush_all(void) { js_present(); }
+void hal_frame_boundary(u32 frame) { (void)frame; }
+
+/* The desktop draws its own software pointer, so the host pointer stays put. */
+void hal_capture_mouse(int on) { (void)on; }
+void hal_get_native_mouse(int *x, int *y) { if (x) *x = 0; if (y) *y = 0; }
+void hal_set_native_mouse(int x, int y) { (void)x; (void)y; }
+
+void hal_beep(int freq, int ms) { js_beep(freq, ms); }
+void hal_request_quit(void) { g_hal_running = 0; js_request_quit(); }
+
+int hal_poll_event(hal_event_t *ev) {
+    if (g_ev_tail == g_ev_head) {
+        /* Nothing queued: ask the shell to decode its pending DOM events.  It
+           fills exactly one hal_event_t and returns 1 if it produced one. */
+        hal_event_t incoming;
+        if (!js_poll_event(&incoming)) return 0;
+        if (incoming.type == HAL_EV_NONE) return 0;
+        *ev = incoming;
+        return 1;
+    }
+    *ev = g_evq[g_ev_tail];
+    g_ev_tail = (g_ev_tail + 1) % HAL_QUEUE_MAX;
+    return 1;
+}
+
+void hal_wallclock(int *y, int *mo, int *d, int *hh, int *mm2, int *ss) {
+    js_wallclock(y, mo, d, hh, mm2, ss);
+}
+
+void hal_dump_ppm(const char *path) { (void)path; }
+
+/* -------------------------------------------------------------------------- */
 /*  Headless (CI) implementation                                              */
 /* -------------------------------------------------------------------------- */
-#ifdef AETHER_HEADLESS
+#elif defined(AETHER_HEADLESS)
 
 #include <time.h>
 /* Declared by hand so <unistd.h> (which declares a conflicting host-level

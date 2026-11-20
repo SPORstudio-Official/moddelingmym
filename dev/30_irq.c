@@ -189,7 +189,12 @@ static char translate_scancode(u8 sc, u8 mods) {
     return c;
 }
 
-void irq_keyboard_push(u8 scancode, int pressed, char ascii_override) {
+/* ascii_override: 0 = derive the glyph from the scancode and modifiers,
+   IRQ_GLYPH_NONE = this transition carries no glyph at all, anything else = the
+   glyph the host already resolved. */
+#define IRQ_GLYPH_NONE (-1)
+
+void irq_keyboard_push(u8 scancode, int pressed, int ascii_override) {
     kbd_event_t *e;
     u32 next;
     if (g_irq.irq_mask & (1 << IRQ_KEYBOARD)) return;
@@ -216,8 +221,9 @@ void irq_keyboard_push(u8 scancode, int pressed, char ascii_override) {
     e->scancode = scancode;
     e->pressed = (u8)(pressed ? 1 : 0);
     e->mods = g_irq.kbd_mods;
-    e->ascii = (u8)(ascii_override ? ascii_override
-                                   : (pressed ? translate_scancode(scancode, g_irq.kbd_mods) : 0));
+    if (ascii_override == IRQ_GLYPH_NONE) e->ascii = 0;
+    else if (ascii_override) e->ascii = (u8)ascii_override;
+    else e->ascii = (u8)(pressed ? translate_scancode(scancode, g_irq.kbd_mods) : 0);
     e->tick = g_irq.ticks;
     g_irq.kbd_head = next;
     g_irq.kbd_events++;
@@ -305,7 +311,17 @@ void irq_host_event(const hal_event_t *ev) {
     switch (ev->type) {
     case HAL_EV_KEYDOWN: {
         u8 sc = host_vk_to_scancode(ev->key);
-        if (sc) irq_keyboard_push(sc, 1, 0);
+        /* Deliver the transition only: no glyph.
+           A GUI host resolves the character itself (Shift, CapsLock, dead keys,
+           keyboard layout) and sends it as a separate HAL_EV_CHAR right after
+           this event, exactly like Win32's WM_CHAR following WM_KEYDOWN.  If
+           this call also derived a glyph from the scancode, every keystroke
+           produced two characters -- "abc" typed as "aabbcc".  Electron relies
+           on this; the Win32 chassis still derives its glyph from WM_CHAR, and
+           the headless chassis sends only HAL_EV_CHAR, so neither is affected.
+           Apps distinguish the two by `ch`: text arrives with ch != 0, while a
+           shortcut arrives carrying only the key code. */
+        if (sc) irq_keyboard_push(sc, 1, IRQ_GLYPH_NONE);
         break;
     }
     case HAL_EV_KEYUP: {

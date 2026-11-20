@@ -17,6 +17,17 @@ OUT=/tmp/aether_syntax.c
     cat "$f"
   done
 } > $OUT
-gcc -fsyntax-only -std=gnu11 -DAETHER_HEADLESS \
-    -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare \
-    $OUT 2>&1 | head -60
+FLAGS="-fsyntax-only -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare"
+rc=0
+# Headless chassis (host libc available).
+gcc $FLAGS -std=gnu11 -DAETHER_HEADLESS $OUT || rc=1
+
+# WebAssembly chassis: freestanding, so no libc header may leak in.  zig cannot
+# do a front-end-only pass (-fsyntax-only still emits), so run the real build in
+# check mode, which discards the artefact.  Skipped when zig is absent.
+if [ -n "${WASM_CC:-}" ] || command -v zig >/dev/null 2>&1; then
+    ZIG=${WASM_CC:-$(command -v zig)} ./tools/build_wasm.sh --check || rc=1
+else
+    echo "syntax_check: zig not found, skipping the wasm target" >&2
+fi
+exit $rc

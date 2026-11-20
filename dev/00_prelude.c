@@ -12,6 +12,14 @@
 #ifdef _WIN32
 #  define AETHER_ON_WIN32 1
 #endif
+#ifdef AETHER_WASM
+/* WebAssembly chassis: compiled freestanding into a .wasm module that the
+   Electron shell instantiates.  It is *not* Win32 and it has no libc at all --
+   exactly like the Windows build, which links -nostdlib.  The module talks to
+   its host through a handful of imported functions (js_*), and the host does
+   the blitting, input collection and wall clock. */
+#  undef AETHER_ON_WIN32
+#endif
 #ifdef AETHER_HEADLESS
 /* Headless (Linux CI) chassis: no window, events are injected from a script. */
 #  undef AETHER_ON_WIN32
@@ -20,12 +28,12 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
-/* The Windows build deliberately does not link a C runtime: the kernel ships
-   its own string/memory/formatting primitives (10_util.c) and its own maths
-   (gfx + bytecode), so the executable depends on nothing but the four Win32
-   system libraries.  The headless CI build still uses the host libc for file
-   I/O and the virtual-time clock. */
-#ifndef AETHER_ON_WIN32
+/* The Windows and WebAssembly builds deliberately do not link a C runtime: the
+   kernel ships its own string/memory/formatting primitives (10_util.c) and its
+   own maths (gfx + bytecode), so the executable depends on nothing but the four
+   Win32 system libraries (or, on wasm, on the shell's js_* imports).  The
+   headless CI build still uses the host libc for file I/O and the clock. */
+#if !defined(AETHER_ON_WIN32) && !defined(AETHER_WASM)
 #  include <string.h>
 #  include <stdlib.h>
 #  include <stdio.h>
@@ -60,6 +68,33 @@ typedef int8_t   i8;
 typedef int16_t  i16;
 typedef int32_t  i32;
 typedef int64_t  i64;
+
+#ifdef AETHER_WASM
+/* --------------------------------------------------------------------------
+ *  WebAssembly shell interface
+ *
+ *  The wasm module cannot open a window or read a clock by itself, so the
+ *  Electron shell provides these.  Each one is a plain scalar function; the
+ *  host implementation lives in app/aether-host.js.  Nothing else crosses the
+ *  boundary, which keeps the module fully self-contained.
+ * ------------------------------------------------------------------------ */
+__attribute__((import_module("env"), import_name("js_now_us")))
+u64 js_now_us(void);
+__attribute__((import_module("env"), import_name("js_present")))
+void js_present(void);
+__attribute__((import_module("env"), import_name("js_poll_event")))
+int js_poll_event(void *out);          /* writes 40 bytes -> 1 if an event    */
+__attribute__((import_module("env"), import_name("js_wallclock")))
+void js_wallclock(int *y, int *mo, int *d, int *hh, int *mm, int *ss);
+__attribute__((import_module("env"), import_name("js_set_title")))
+void js_set_title(const char *t);
+__attribute__((import_module("env"), import_name("js_beep")))
+void js_beep(int freq, int ms);
+__attribute__((import_module("env"), import_name("js_log")))
+void js_log(const char *msg);
+__attribute__((import_module("env"), import_name("js_request_quit")))
+void js_request_quit(void);
+#endif
 
 #define AETHER_VERSION_MAJOR 1
 #define AETHER_VERSION_MINOR 0
