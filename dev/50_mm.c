@@ -201,6 +201,13 @@ void *mm_alloc_tagged(u32 size, u32 tag) {
     if (size == 0) size = 1;
     want = (size + MM_ALIGN - 1) & ~(u32)(MM_ALIGN - 1);
     for (b = g_mm.free_list; b; b = mm_next_free(b)) {
+#ifdef AETHER_MM_DEBUG
+        if ((u8 *)b < (u8 *)g_mm.head || (u8 *)b >= (u8 *)g_mm.head + HEAP_SIZE) {
+            fprintf(stderr, "[mm] CORRUPT free_list node %p outside heap, want=%u\n",
+                    (void *)b, (unsigned)want);
+            abort();
+        }
+#endif
         if (b->magic != MM_MAGIC_FREE) { g_mm.scan_hits++; continue; }
         if (b->size >= want) break;
     }
@@ -220,7 +227,80 @@ void *mm_alloc_tagged(u32 size, u32 tag) {
     return (u8 *)b + sizeof(mm_block_t);
 }
 
-void *mm_kmalloc(u32 size) { return mm_alloc_tagged(size, 0); }
+/* --------------------------------------------------------------------------
+ *  Heap integrity check
+ *
+ *  mm_kfree() has to keep the block chain and the free list consistent with each
+ *  other: a block that is merged away must also leave the free list, otherwise
+ *  the list ends up holding pointers to the interior of another block and a
+ *  later allocation can overlap live data.  That failure mode is invisible until
+ *  something crashes far away, so the allocator verifies both structures on
+ *  every allocation when AETHER_MM_CHECK is defined.
+ *
+ *      tools/debug_build.sh -DAETHER_MM_CHECK
+ * -------------------------------------------------------------------------- */
+#ifdef AETHER_MM_CHECK
+void mm_check(const char *where) {
+    mm_block_t *b = g_mm.head;
+    int n = 0;
+    {
+        mm_block_t *q = g_mm.free_list;
+        int k = 0;
+        while (q) {
+            if ((u8 *)q < (u8 *)g_mm.head || (u8 *)q >= (u8 *)g_mm.head + HEAP_SIZE ||
+                ((size_t)q & 7) || q->magic != MM_MAGIC_FREE ||
+                !(q->flags & MM_FLAG_FREE)) {
+                klog("mm: %s: bad free-list node %d at %p (magic %08x flags %x)",
+                     where, k, (void *)q, (unsigned)q->magic, (unsigned)q->flags);
+                mm_panic_freeze();
+            }
+            if (++k > 4096) {
+                klog("mm: %s: free list does not terminate", where);
+                mm_panic_freeze();
+            }
+            q = mm_next_free(q);
+        }
+    }
+    while (b) {
+        int is_free = (b->flags & MM_FLAG_FREE) != 0;
+        u32 want = is_free ? MM_MAGIC_FREE : MM_MAGIC_ALLOC;
+        if (b->magic != want || MM_FOOT(b)->magic != MM_MAGIC_FOOT ||
+            MM_FOOT(b)->size != b->size) {
+            klog("mm: %s: block %d at %p corrupt (size %u flags %x magic %08x)",
+                 where, n, (void *)b, (unsigned)b->size, (unsigned)b->flags,
+                 (unsigned)b->magic);
+            mm_panic_freeze();
+        }
+        if (++n > 4096) {
+            klog("mm: %s: block chain does not terminate", where);
+            mm_panic_freeze();
+        }
+        b = b->next;
+    }
+}
+#else
+void mm_check(const char *where) { (void)where; }
+#endif
+
+static void mm_panic_freeze(void) {
+    /* A corrupted heap cannot be recovered, so take the machine down through
+       the real panic screen; the reason is already in dmesg. */
+    extern void kernel_panic(const char *reason, u32 eip, u32 pid);
+    kernel_panic("heap integrity check failed", 0x0043A55E, mm_current_pid());
+    for (;;) { }
+}
+
+void *mm_kmalloc(u32 size) {
+    void *p;
+#ifdef AETHER_MM_CHECK
+    mm_check("alloc");
+#endif
+    p = mm_alloc_tagged(size, 0);
+#ifdef AETHER_MM_CHECK
+    if (!p) klog("mm: allocation of %u bytes failed", (unsigned)size);
+#endif
+    return p;
+}
 
 void *mm_kcalloc(u32 n, u32 size) {
     u32 total = n * size;
@@ -262,9 +342,16 @@ int mm_kfree(void *ptr) {
     b->pid = 0;
     b->tag = 0;
     mm_write_tags(b, b->size, MM_MAGIC_FREE);
+    /* Coalescing merges neighbouring blocks into one, so every block that is
+       absorbed has to leave the free list first.  Leaving a merged-away block
+       on the list made the list hold interior pointers (and eventually a
+       cycle), after which an allocation could be handed a block that overlapped
+       a live one -- the corruption that used to show up as a free-list node
+       pointing into the string "AetherOS". */
     /* backward coalesce */
     if (b->prev && (b->prev->flags & MM_FLAG_FREE) && b->prev->magic == MM_MAGIC_FREE) {
         mm_block_t *p = b->prev;
+        mm_free_list_remove(p);
         p->next = b->next;
         if (b->next) b->next->prev = p;
         else g_mm.tail = p;
@@ -275,6 +362,7 @@ int mm_kfree(void *ptr) {
     /* forward coalesce */
     n = b->next;
     if (n && (n->flags & MM_FLAG_FREE) && n->magic == MM_MAGIC_FREE) {
+        mm_free_list_remove(n);
         b->next = n->next;
         if (n->next) n->next->prev = b;
         else g_mm.tail = b;

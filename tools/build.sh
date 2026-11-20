@@ -78,7 +78,9 @@ for f in "${MODULES[@]}"; do
 done
 
 if [ "${1:-}" = "--headless" ]; then
-  gcc -O1 -g -std=c11 -DAETHER_HEADLESS -Wall -Wextra -Wno-unused-parameter \
+  # gnu11 (not c11): the headless chassis uses POSIX clock_gettime/localtime_r,
+  # which a strict -std=c11 hides behind feature-test macros.
+  gcc -O1 -g -std=gnu11 -DAETHER_HEADLESS -Wall -Wextra -Wno-unused-parameter \
       -Wno-unused-function -Wno-sign-compare \
       aether_os.c -o dev/aether_headless -lm
   echo "built dev/aether_headless"

@@ -213,8 +213,11 @@ int hal_poll_event(hal_event_t *ev) {
         }
     } else if (!kstrcmp(what, "click") || !kstrcmp(what, "down") || !kstrcmp(what, "up")) {
         if (sscanf(line, "%*u %*s %d %d", &ev->mx, &ev->my) == 2) {
+            /* A release must carry no buttons, otherwise the emulated button
+               state never clears and the next 'down' is not seen as a fresh
+               press (the desktop only reacts to state transitions). */
             ev->type = (what[0] == 'u') ? HAL_EV_MOUSEUP : HAL_EV_MOUSEDOWN;
-            ev->buttons = 1;
+            ev->buttons = (what[0] == 'u') ? 0 : 1;
             return 1;
         }
     } else if (!kstrcmp(what, "wheel")) {

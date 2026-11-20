@@ -148,21 +148,34 @@ static void ed_newline(editor_t *ed) {
     char *ln = ed->lines[ed->cy];
     int len = ed_line_len(ed, ed->cy);
     char tail[ED_MAX_COLS];
+    char head[ED_MAX_COLS];
     int indent = 0;
     int i;
+    if (!ln) return;
+    /* Clamp the caret: mouse clicks and stale column state can leave cx past
+       the end of the line, and every slice below assumes cx <= len. */
+    if (ed->cx > len) ed->cx = len;
+    if (ed->cx < 0) ed->cx = 0;
     kstrncpy(tail, ln + ed->cx, sizeof(tail) - 1);
+    tail[sizeof(tail) - 1] = 0;
+    /* Snapshot the head before the line is reallocated, so the indent scan
+       cannot read from a moved or freed buffer. */
+    kstrncpy(head, ln, sizeof(head) - 1);
+    head[sizeof(head) - 1] = 0;
     ln[ed->cx] = 0;
     ln = (char *)mm_krealloc(ln, (u32)ed->cx + 1);
-    if (ln) ed->lines[ed->cy] = ln;
+    if (!ln) return;                    /* keep the truncated line, no split */
+    ed->lines[ed->cy] = ln;
     /* auto-indent */
     for (i = 0; i < ed->cx && i < 16; i++) {
-        if (ln[i] == ' ') indent++;
+        if (head[i] == ' ') indent++;
         else break;
     }
-    if (ed->cx > 0 && ln[ed->cx - 1] == '{') indent += 4;
+    if (ed->cx > 0 && head[ed->cx - 1] == '{') indent += 4;
+    if (indent > 16) indent = 16;
     {
         char indent_buf[24];
-        char combined[ED_MAX_COLS];
+        char combined[ED_MAX_COLS * 2];
         int k;
         for (k = 0; k < indent; k++) indent_buf[k] = ' ';
         indent_buf[indent] = 0;

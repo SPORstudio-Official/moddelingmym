@@ -466,7 +466,7 @@ static void explorer_mouse(void *state, int event, int x, int y, int button, int
             int i;
             for (i = 0; i < ex->nent; i++) {
                 wm_rect_t r = exp_icon_rect(c, i, NULL);
-                if (x >= r.x - c.x + c.x && x >= r.x && x < r.x + r.w && y >= r.y - c.y && y < r.y + r.h) {
+                if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) {
                     int was = ex->selected;
                     ex->selected = i;
                     if (event == APP_EV_MOUSE_DBLCLICK) { exp_open_entry(ex, i); return; }
