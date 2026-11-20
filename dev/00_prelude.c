@@ -238,6 +238,7 @@ u32    k_abs(i32 v);
 int    k_min(int a, int b);
 int    k_max(int a, int b);
 int    k_clamp(int v, int lo, int hi);
+u32    k_isqrt(u32 v);                     /* integer square root (floor)     */
 u64    now_us(void);
 u32    now_ms(void);
 void   klog(const char *fmt, ...);         /* kernel ring buffer + boot log    */

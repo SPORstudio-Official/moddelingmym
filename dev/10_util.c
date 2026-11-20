@@ -349,6 +349,20 @@ int k_min(int a, int b) { return a < b ? a : b; }
 int k_max(int a, int b) { return a > b ? a : b; }
 int k_clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+/* Integer square root by binary search.  Used by the software renderer, which
+ * must not pull in libm's double-precision sqrt for a per-scanline width --
+ * that single call was the hottest instruction stream in the compositor. */
+u32 k_isqrt(u32 v) {
+    u32 r = 0, bit = 1u << 30;
+    while (bit > v) bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Monotonic clock                                                           */
 /* -------------------------------------------------------------------------- */

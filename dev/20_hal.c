@@ -13,6 +13,10 @@
  *  produced by the AetherOS compositor.
  * ========================================================================== */
 
+/* 40_gfx.c draws the software pointer; the HAL composites it as the final step
+   of a present so it never dirties the layers underneath. */
+void gfx_composite_cursor(void);
+
 typedef struct {
     int  type;          /* HAL_EV_*                                            */
     int  key;           /* virtual key code (keyboard)                         */
@@ -149,10 +153,11 @@ void hal_sleep_ms(int ms) { (void)ms; }
    always blits the whole 1280x720 surface. */
 void hal_present(int x, int y, int w, int h) {
     (void)x; (void)y; (void)w; (void)h;
+    gfx_composite_cursor();    /* the pointer is the last thing on the screen */
     js_present();
 }
 
-void hal_flush_all(void) { js_present(); }
+void hal_flush_all(void) { gfx_composite_cursor(); js_present(); }
 void hal_frame_boundary(u32 frame) { (void)frame; }
 
 /* The desktop draws its own software pointer, so the host pointer stays put. */
@@ -242,6 +247,7 @@ void hal_frame_boundary(u32 frame) {
     for (i = 0; i < g_dump_count; i++) {
         if ((u32)g_dump_frame[i] == frame) {
             g_dump_frame[i] = -1;
+            gfx_composite_cursor();
             hal_dump_ppm(g_dump_path[i]);
         }
     }
@@ -512,8 +518,10 @@ void hal_present(int x, int y, int w, int h) {
     if (y < 0) { h += y; y = 0; }
     if (x + w > SCREEN_W) w = SCREEN_W - x;
     if (y + h > SCREEN_H) h = SCREEN_H - y;
-    if (w > 0 && h > 0)
+    if (w > 0 && h > 0) {
+        gfx_composite_cursor();
         BitBlt(dc, x, y, w, h, g_memdc, x, y, SRCCOPY);
+    }
     ReleaseDC(g_hwnd, dc);
 }
 

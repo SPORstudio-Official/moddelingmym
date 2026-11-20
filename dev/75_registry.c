@@ -4,6 +4,11 @@
 
 typedef struct { int x, y, w, h; } wm_rect_t;
 
+/* The compositor caches the static wallpaper; anything that changes it has to
+   say so or the desktop keeps showing the previous one.  Defined in 80_wm.c --
+   the registry is compiled before it, so this is a forward declaration. */
+void wm_invalidate_backdrop(void);
+
 /* Forward declarations for the window manager (80_wm.c). */
 typedef struct window window_t;
 struct app_desc;
@@ -176,6 +181,7 @@ void theme_apply(int index) {
     if (index < 0 || index > 3) index = 0;
     g_theme_index = index;
     g_theme = g_themes[index];
+    wm_invalidate_backdrop();
 }
 
 theme_t *theme_get(void) { return &g_theme; }
@@ -196,7 +202,10 @@ void gfx_set_scanline_level(int level) { g_scanlines = k_clamp(level, 0, 3); }
 #define WALLPAPER_COUNT 6
 static int g_wallpaper = 1;
 int  wallpaper_index(void) { return g_wallpaper; }
-void wallpaper_set(int i) { g_wallpaper = k_clamp(i, 0, WALLPAPER_COUNT - 1); }
+void wallpaper_set(int i) {
+    g_wallpaper = k_clamp(i, 0, WALLPAPER_COUNT - 1);
+    wm_invalidate_backdrop();
+}
 int  wallpaper_count(void) { return WALLPAPER_COUNT; }
 const char *wallpaper_name(int i) {
     static const char *n[WALLPAPER_COUNT] = {
@@ -296,8 +305,16 @@ void desktop_cfg_save(void) {
    saves immediately so a change is never lost. */
 void desktop_set_theme(int i) { desktop_cfg()->theme = k_clamp(i, 0, 3); theme_apply(g_cfg.theme); desktop_cfg_save(); }
 void desktop_set_wallpaper(int i) { desktop_cfg()->wallpaper = k_clamp(i, 0, WALLPAPER_COUNT - 1); wallpaper_set(g_cfg.wallpaper); desktop_cfg_save(); }
-void desktop_set_solid(u32 c) { desktop_cfg()->solid = c; desktop_cfg()->wallpaper = WALLPAPER_COUNT - 1; wallpaper_set(g_cfg.wallpaper); desktop_cfg_save(); }
-void desktop_set_accent(int on, u32 c) { desktop_cfg()->accent = on; desktop_cfg()->accent_color = c; if (on) theme_get()->accent = c; else theme_apply(g_cfg.theme); desktop_cfg_save(); }
+void desktop_set_solid(u32 c) {
+    desktop_cfg()->solid = c; desktop_cfg()->wallpaper = WALLPAPER_COUNT - 1;
+    wallpaper_set(g_cfg.wallpaper); desktop_cfg_save();
+}
+void desktop_set_accent(int on, u32 c) {
+    desktop_cfg()->accent = on; desktop_cfg()->accent_color = c;
+    if (on) theme_get()->accent = c; else theme_apply(g_cfg.theme);
+    wm_invalidate_backdrop();
+    desktop_cfg_save();
+}
 void desktop_set_crt(int on) { desktop_cfg()->crt = on ? 1 : 0; gfx_set_scanlines(g_cfg.crt); desktop_cfg_save(); }
 void desktop_set_font_scale(int i) { desktop_cfg()->font_scale = k_clamp(i, 0, 2); desktop_cfg_save(); }
 void desktop_set_transparency(int v) { desktop_cfg()->transparency = k_clamp(v, 0, 100); desktop_cfg_save(); }
