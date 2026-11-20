@@ -11,10 +11,11 @@
     "build:single": "node tools/bundle_standalone.js",
     "build": "npm run build:wasm && npm run build:single",
     "app": "bash tools/make_app.sh",
+    "exe": "bash tools/build_exe.sh",
     "start": "npm run build && electron .",
     "start:only": "electron .",
     "web": "node tools/serve.js",
-    "test": "node tools/host_test.js && node tools/browser_test.js && node tools/customise_test.js && node tools/bundle_test.js",
+    "test": "node tools/host_test.js && node tools/browser_test.js && node tools/customise_test.js && node tools/bundle_test.js && node tools/exe_test.js",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "fetch-electron": "node node_modules/electron/install.js"

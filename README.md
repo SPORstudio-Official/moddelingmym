@@ -112,8 +112,21 @@ Win32 and headless chassis are unaffected.
 ### A standalone app, no install
 
 ```sh
+npm run exe        # -> dist/AetherOS.exe (Windows, single file, double-click)
 npm run app        # -> dist/AetherOS.html + launchers for every platform
 ```
+
+`dist/AetherOS.exe` is a real Windows executable, not a shortcut: a 10 KB native
+launcher with the whole 1.4 MB machine appended to it as a payload. Double-click
+it and AetherOS opens in its own window. It needs no installer, no runtime, no
+Node, no Electron and no network. The launcher imports only `KERNEL32`,
+`ADVAPI32`, `SHELL32` and `USER32` -- it has no C runtime dependency, so it runs
+on any 64-bit Windows from 7 onward. On start it finds the `<!DOCTYPE html>`
+anchor, writes the payload to `%TEMP%\AetherOS.html`, and opens that file with
+its own private browser profile via a Chromium-family browser in `--app` mode;
+if no such browser exists it hands the file to the default browser instead, and
+every failure path shows a normal Windows message box rather than failing
+silently.
 
 `dist/AetherOS.html` is the whole machine in one 1.4 MB file: kernel,
 compositor, VFS, scheduler, C compiler, every app and the browser. Double-click
@@ -122,7 +135,7 @@ window so it feels like a program rather than a web page:
 
 | Platform | Launcher |
 | --- | --- |
-| Windows | `dist\AetherOS.cmd` (Edge/Chrome `--app` mode) |
+| Windows | `dist\AetherOS.exe` (double-click), or `dist\AetherOS.cmd` for the script version |
 | macOS | `dist/AetherOS.command` |
 | Linux | `dist/aether-os.sh`, or install `AetherOS.desktop` |
 
