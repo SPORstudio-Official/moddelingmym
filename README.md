@@ -44,14 +44,37 @@ The kernel is one translation unit assembled from ordered modules in `dev/`.
 | `dev/86..93_app_*.c` | sysmon, explorer, editor, hexview, paint, settings, calc, console |
 | `dev/95_main.c` | boot sequence, panic handler, main loop |
 
+## What it does
+
+- **AetherShell** -- command interpreter with `ls`, `cat`, `cp`, `mv`, `rm`,
+  `stat`, `hexdump`, `df`, `free`, `ps`, `top`, `dmesg`, `uname`, `theme`, plus
+  `cc`/`run` for the built-in compiler.
+- **`cc` + bytecode VM** -- compiles a C subset (functions, recursion, loops,
+  `print`, framebuffer calls) and runs it as a real PID. `fib(0..19)` is
+  computed recursively inside the VM.
+- **Window manager** -- drag, resize, snap, minimize, maximize, z-order, taskbar
+  with live CPU/RAM tray, Start menu, toasts, four themes and four wallpapers.
+- **Apps** -- System Monitor (live graphs, heap block map, VFS map, process kill),
+  File Explorer, Code Studio editor with syntax highlighting, Hex Inspector,
+  Paint Studio, Control Panel, Calculator, Program Console.
+
 ## Verification
 
 ```sh
 tools/syntax_check.sh    # warning-free compile of every module
 tools/math_check.sh      # freestanding sqrt/sin/cos/pow/fmod/exp/log vs libm
 tools/headless_run.sh /tmp/session.txt   # replay an input script, dump frames
+tools/debug_build.sh -DAETHER_MM_CHECK -fsanitize=address,undefined
 ```
 
 The headless chassis accepts a timestamped script (`mousemove`, `down`, `up`,
 `click`, `key`, `wheel`, `dump <path.ppm>`, `quit`) and is how every UI change in
-this project is checked without a Windows machine.
+this project is checked without a Windows machine. It tracks button state across
+`down`/`up`, so drags (paint strokes, window moves) can be scripted.
+
+`AETHER_MM_CHECK` verifies the allocator's block chain and free list on every
+allocation and panics on corruption; together with ASan it is how the
+free-list merge bug and the over-the-edge framebuffer write were found.
+
+> Note: a hand-run `gcc aether_os.c` compiles a *stale* concatenation -- use
+> `tools/debug_build.sh`, which reassembles the modules first.
