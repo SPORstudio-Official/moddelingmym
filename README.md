@@ -109,6 +109,70 @@ the scancode. The transition now carries no glyph, and the host-resolved glyph
 is authoritative -- matching Win32, where `WM_CHAR` follows `WM_KEYDOWN`. The
 Win32 and headless chassis are unaffected.
 
+### A standalone app, no install
+
+```sh
+npm run app        # -> dist/AetherOS.html + launchers for every platform
+```
+
+`dist/AetherOS.html` is the whole machine in one 1.4 MB file: kernel,
+compositor, VFS, scheduler, C compiler, every app and the browser. Double-click
+it and it runs, offline. The generated launchers open it in a chrome-less app
+window so it feels like a program rather than a web page:
+
+| Platform | Launcher |
+| --- | --- |
+| Windows | `dist\AetherOS.cmd` (Edge/Chrome `--app` mode) |
+| macOS | `dist/AetherOS.command` |
+| Linux | `dist/aether-os.sh`, or install `AetherOS.desktop` |
+
+Electron (`npm start`) is still there for a true native window, but it needs a
+200 MB platform-specific download and, to distribute, code signing. For an OS
+that already runs in any browser engine, one HTML file is the honest standalone
+build.
+
+### Customising it
+
+Everything is changeable from the Control Panel's Appearance tab or from
+AetherShell, and every change is written to `/etc/desktop.cfg` so it survives a
+reboot:
+
+```sh
+theme 0-3          # four colour themes
+wallpaper 0-5      # six wallpapers, the last a colour you choose
+accent 4fc3f7      # the highlight colour every app uses (`accent off` reverts)
+font 0-2           # interface scale: compact / normal / large
+crt 0-1            # CRT scanline shader
+customise          # print the current settings and how to change them
+resetprefs         # back to defaults
+cat /etc/desktop.cfg    # the settings are a plain text file
+```
+
+Two extra wallpapers ship with this: **Aurora Drift** (procedural curtains) and
+**Solid Colour**, which fills the desktop with a colour of your choosing so the
+machine can be made to look like nothing else.
+
+### AetherBrowser
+
+A real browser, in the machine, with an address bar, history, back/forward,
+scrollable pages and clickable links. `browser` in the shell, or the globe icon.
+
+It is a **reading view, not a rendering engine**: it fetches the page, discards
+scripts and styling, and lays out the text, headings and links. Article-style
+content -- documentation, wikis, news, search results -- renders very well;
+JavaScript-heavy apps do not, and it says so rather than pretending.
+
+Pages are fetched by the host process, because the wasm module is sandboxed.
+The request is **asynchronous**: the host starts a `fetch()`, the kernel polls
+it once per frame, and the window keeps repainting at full rate while it waits.
+Blocking the module's thread would have frozen the window for the length of the
+request, which is why `net_begin`/`net_poll`/`net_finish` exist alongside the
+simple `net_fetch` used during boot.
+
+Local pages (`aether://about`, `aether://files`, `aether://commands`) never
+touch the network. On the Win32 build, which has no network stack, the browser
+still runs and reports plainly that networking is unavailable.
+
 ## Verification
 
 ```sh

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AetherOS
+Comment=An operating system that boots inside a window
+Exec=sh -c 'cd "$(dirname "%k")" 2>/dev/null; ./aether-os.sh'
+Icon=applications-system
+Terminal=false
+Categories=System;Utility;
