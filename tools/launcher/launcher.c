@@ -206,12 +206,80 @@ typedef struct {
     unsigned long long   len;
 } payload_t;
 
-/* Read the appended HTML by re-opening this executable.
+/* Read the appended image by re-opening this executable.
  *
  * The payload does not start immediately after the marker: the marker lives in a
  * data section inside the last mapped page, and the payload is appended after
  * the whole file, so there is padding in between.  Anchor on the HTML doctype,
  * which cannot appear in the stub's own code, and read to end of file. */
+
+/* Is there a real PE image at buf[j]?
+ *
+ * e_lfanew is a 32-bit little-endian field at MZ+0x3c holding the offset from
+ * the MZ to the PE signature.  The first version of this test read it as
+ * `buf[j+0x3c] < 0x40 && buf[j+0x3c+4] >= 0x40 && buf[j+0x3c+4] <= 0xf0`, i.e.
+ * as two separate bytes, which rejected virtually every real image: zig writes
+ * e_lfanew = 0x78, and 0x78 < 0x40 is false.  The scan then ran off the end of
+ * the file, the payload looked missing, and the launcher showed "this file
+ * seems to be incomplete" for a perfectly good build.
+ *
+ * Any byte-range guess has that shape of bug.  The honest test is what the
+ * loader itself does: read the 32-bit offset, bounds-check it, and require the
+ * PE signature there. */
+static int pe_image_at(const unsigned char *buf, unsigned long long limit,
+                       unsigned long long j) {
+    unsigned long long lfanew;
+    const unsigned char *pe;
+
+    if (j > limit || limit - j < 0x40) return 0;          /* header + lfanew */
+    if (buf[j] != 'M' || buf[j + 1] != 'Z') return 0;
+
+    lfanew = (unsigned long long)buf[j + 0x3c]
+           | ((unsigned long long)buf[j + 0x3d] << 8)
+           | ((unsigned long long)buf[j + 0x3e] << 16)
+           | ((unsigned long long)buf[j + 0x3f] << 24);
+
+    /* e_lfanew beyond the file cannot be a header; a value under the DOS header
+       would collide with the fields already read. */
+    if (lfanew < 0x40 || lfanew > limit - j) return 0;
+    if (limit - j - lfanew < 4) return 0;
+
+    pe = buf + j + lfanew;
+    return pe[0] == 'P' && pe[1] == 'E' && pe[2] == 0 && pe[3] == 0;
+}
+
+/* Find the appended image inside a buffer that has already been read.
+ *
+ * Deliberately separate from the file I/O above: this is the part with the
+ * logic, so this is the part a test can compile on Linux and call with the real
+ * AE.exe in hand.  Keeping it inside payload_read() is what let a broken
+ * e_lfanew test ship -- the build script and the Node test each re-implemented
+ * the scan correctly, so nothing ever ran the launcher's own version. */
+#if defined(__GNUC__) && !defined(_WIN32)
+__attribute__((used, visibility("default")))
+#endif
+int launcher_find_payload(const unsigned char *buf, unsigned long long limit,
+                          const unsigned char **out, unsigned long long *out_len) {
+    unsigned long long i, j;
+
+    for (i = 0; i + MAGIC_LEN <= limit; i++) {
+        unsigned long long k;
+        if (buf[i] != (unsigned char)PAYLOAD_MAGIC[0]) continue;
+        for (k = 1; k < MAGIC_LEN; k++)
+            if (buf[i + k] != (unsigned char)PAYLOAD_MAGIC[k]) break;
+        if (k != MAGIC_LEN) continue;
+        j = i + k;
+        for (; j + 0x40 <= limit; j++) {
+            if (pe_image_at(buf, limit, j)) {
+                *out = buf + j;
+                *out_len = limit - j;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static payload_t payload_read(const char *self_path) {
     payload_t p = { 0, 0 };
     HANDLE h = CreateFileA(self_path, GENERIC_READ, FILE_SHARE_READ, NULL,
@@ -223,7 +291,7 @@ static payload_t payload_read(const char *self_path) {
     if (h == INVALID_HANDLE_VALUE) return p;
     if (!GetFileSizeEx(h, &size) || size.QuadPart <= 0) { CloseHandle(h); return p; }
     buf = (unsigned char *)VirtualAlloc(NULL, (SIZE_T)size.QuadPart,
-                                        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                                       MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!buf) { CloseHandle(h); return p; }
     if (!ReadFile(h, buf, (DWORD)size.QuadPart, &read, NULL) || read != (DWORD)size.QuadPart) {
         VirtualFree(buf, 0, MEM_RELEASE);
@@ -232,33 +300,16 @@ static payload_t payload_read(const char *self_path) {
     }
     CloseHandle(h);
 
-    /* The appended bytes are a second PE image: the native OS executable.
-     * Find the marker the build script wrote into the stub, then take the next
-     * MZ/PE header after it -- the marker itself lives inside a mapped data
-     * section, so there is padding between the two. */
     {
-        const unsigned long long limit = (unsigned long long)read;
-        unsigned long long i, j;
-        for (i = 0; i + sizeof(PAYLOAD_MAGIC) <= limit; i++) {
-            unsigned long long k;
-            if (buf[i] != (unsigned char)PAYLOAD_MAGIC[0]) continue;
-            for (k = 1; k < sizeof(PAYLOAD_MAGIC) - 1; k++)
-                if (buf[i + k] != (unsigned char)PAYLOAD_MAGIC[k]) break;
-            if (k != sizeof(PAYLOAD_MAGIC) - 1) continue;
-            j = i + k;
-            for (; j + 0x40 < limit; j++) {
-                if (buf[j] == 'M' && buf[j + 1] == 'Z'
-                    && buf[j + 0x3c] < 0x40
-                    && buf[j + 0x3c + 4] >= 0x40
-                    && buf[j + 0x3c + 4] <= 0xf0) {
-                    p.data = buf + j;
-                    p.len = limit - j;
-                    return p;
-                }
-            }
+        const unsigned char *found = NULL;
+        unsigned long long found_len = 0;
+        if (!launcher_find_payload(buf, (unsigned long long)read, &found, &found_len)) {
+            VirtualFree(buf, 0, MEM_RELEASE);
+            return p;
         }
+        p.data = found;
+        p.len = found_len;
     }
-    VirtualFree(buf, 0, MEM_RELEASE);
     return p;
 }
 

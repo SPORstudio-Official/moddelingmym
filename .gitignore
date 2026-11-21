@@ -3,6 +3,7 @@
 # a stable blob (GitHub's asset upload host is not reachable from every build
 # environment, including this one).
 AetherOS.pdb
+/AE.pdb
 aether_os.c
 *.obj
 *.o

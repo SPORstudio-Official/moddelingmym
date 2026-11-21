@@ -28,7 +28,7 @@ param(
     # is the same bytes the build produced, served straight from git.  `raw`
     # redirects to the CDN, which Invoke-WebRequest follows.
     [string] $BaseUrl  = 'https://github.com/SPORstudio-Official/moddelingmym/raw/main/dist',
-    [string] $Sha256   = '99349ca3aec446e3742fe7efd30f61fdcbfd495b677a660f7d00f2af0e24a5cc',
+    [string] $Sha256   = 'e12239e479bc0972532894e9fdba106c551c9e881f911af8a2e66d48f816108d',
     [string] $InstallDir = (Join-Path $env:LOCALAPPDATA 'AE'),
     [switch] $AddShortcut,
     [switch] $NoLaunch
