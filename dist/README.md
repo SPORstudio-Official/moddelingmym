@@ -29,7 +29,7 @@ Choose **More info → Run anyway**.
 
 ## 1. `AE.exe` — the real thing  ✅ recommended
 
-**821,760 bytes** — SHA-256 `99349ca3aec446e3742fe7efd30f61fdcbfd495b677a660f7d00f2af0e24a5cc`
+**821,760 bytes** — SHA-256 `13e413603a01538295d789a236de6e0f1fb58221c4541369432a94ada7ea0538`
 
 Windows 10/11, x86-64. No installer, no browser, no dependencies: double-click it
 and AE is running as a native program.
