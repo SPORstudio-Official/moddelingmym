@@ -376,10 +376,20 @@ int aether_frame(void) {
                        the previous state, and the move handler must not be
                        allowed to clear it before wm_on_mouse_down/up run. */
                     int was_down = g_wm.mouse_down;
+                    int was_right = g_wm.mouse_right_down;
                     g_wm.mouse_px = me.x;
                     g_wm.mouse_py = me.y;
                     if (me.dz) wm_on_wheel(me.x, me.y, me.dz);
-                    if ((buttons & 1) && !was_down) {
+                    /* Each button is tracked independently: pressing the right
+                       button while the left is held must not look like a drag,
+                       and releasing one must not release the other. */
+                    if ((buttons & 2) && !was_right) {
+                        wm_on_mouse_down(me.x, me.y, 2);
+                        wm_on_mouse_move(me.x, me.y, buttons);
+                    } else if (!(buttons & 2) && was_right) {
+                        wm_on_mouse_up(me.x, me.y, 2);
+                        wm_on_mouse_move(me.x, me.y, buttons);
+                    } else if ((buttons & 1) && !was_down) {
                         wm_on_mouse_down(me.x, me.y, 1);
                         wm_on_mouse_move(me.x, me.y, buttons);
                     } else if (!(buttons & 1) && was_down) {

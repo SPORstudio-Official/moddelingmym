@@ -357,13 +357,19 @@ int hal_poll_event(hal_event_t *ev) {
             ev->buttons = g_script_buttons;
             return 1;
         }
-    } else if (!kstrcmp(what, "click") || !kstrcmp(what, "down") || !kstrcmp(what, "up")) {
+    } else if (!kstrcmp(what, "click") || !kstrcmp(what, "down") || !kstrcmp(what, "up") ||
+               !kstrcmp(what, "rdown") || !kstrcmp(what, "rup") ||
+               !kstrcmp(what, "rdrag") || !kstrcmp(what, "mdrag")) {
         if (sscanf(line, "%*u %*s %d %d", &ev->mx, &ev->my) == 2) {
             /* A release must carry no buttons, otherwise the emulated button
                state never clears and the next 'down' is not seen as a fresh
                press (the desktop only reacts to state transitions). */
-            ev->type = (what[0] == 'u') ? HAL_EV_MOUSEUP : HAL_EV_MOUSEDOWN;
-            ev->buttons = (what[0] == 'u') ? 0 : 1;
+            int release = (what[0] == 'u') || !kstrcmp(what, "rup");
+            int right = !kstrcmp(what, "rdown") || !kstrcmp(what, "rup") ||
+                        !kstrcmp(what, "rdrag");
+            int middle = !kstrcmp(what, "mdrag");
+            ev->type = release ? HAL_EV_MOUSEUP : HAL_EV_MOUSEDOWN;
+            ev->buttons = release ? 0 : (right ? 2 : (middle ? 4 : 1));
             g_script_buttons = ev->buttons;
             return 1;
         }
