@@ -2,7 +2,12 @@
  *  REGISTRY -- theme service, application registry, notifications, clipboard
  * ========================================================================== */
 
-typedef struct { int x, y, w, h; } wm_rect_t;
+/* wm_rect_t is declared once, in 00_prelude.c. */
+
+/* The compositor caches the static wallpaper; anything that changes it has to
+   say so or the desktop keeps showing the previous one.  Defined in 80_wm.c --
+   the registry is compiled before it, so this is a forward declaration. */
+void wm_invalidate_backdrop(void);
 
 /* Forward declarations for the window manager (80_wm.c). */
 typedef struct window window_t;
@@ -53,10 +58,11 @@ extern const app_desc_t app_paint;
 extern const app_desc_t app_settings;
 extern const app_desc_t app_calc;
 extern const app_desc_t app_console;
+extern const app_desc_t app_browser;
 
 static const app_desc_t *const g_app_table[] = {
     &app_shell, &app_explorer, &app_edit, &app_sysmon,
-    &app_hexview, &app_paint, &app_settings, &app_calc, &app_console
+    &app_hexview, &app_paint, &app_settings, &app_calc, &app_console, &app_browser
 };
 #define APP_COUNT ((int)(sizeof(g_app_table) / sizeof(g_app_table[0])))
 
@@ -175,6 +181,7 @@ void theme_apply(int index) {
     if (index < 0 || index > 3) index = 0;
     g_theme_index = index;
     g_theme = g_themes[index];
+    wm_invalidate_backdrop();
 }
 
 theme_t *theme_get(void) { return &g_theme; }
@@ -190,14 +197,133 @@ void gfx_set_scanlines(int on) { g_crt_enabled = on ? 1 : 0; }
 int  gfx_scanlines_state(void) { return g_scanlines; }
 void gfx_set_scanline_level(int level) { g_scanlines = k_clamp(level, 0, 3); }
 
-/* Wallpaper selection: 0 grid, 1 nebula, 2 slate, 3 synthwave */
+/* Wallpaper selection.  Six built-ins, and the last one is a flat colour the
+   user picks, so the desktop can be made to look like nothing else in the box. */
+#define WALLPAPER_COUNT 6
 static int g_wallpaper = 1;
 int  wallpaper_index(void) { return g_wallpaper; }
-void wallpaper_set(int i) { g_wallpaper = k_clamp(i, 0, 3); }
+void wallpaper_set(int i) {
+    g_wallpaper = k_clamp(i, 0, WALLPAPER_COUNT - 1);
+    wm_invalidate_backdrop();
+}
+int  wallpaper_count(void) { return WALLPAPER_COUNT; }
 const char *wallpaper_name(int i) {
-    static const char *n[4] = { "Cyber Grid", "Deep Space Nebula", "Classic Unix Slate", "Sunset Synthwave" };
-    if (i < 0 || i > 3) return "";
+    static const char *n[WALLPAPER_COUNT] = {
+        "Cyber Grid", "Deep Space Nebula", "Classic Unix Slate",
+        "Sunset Synthwave", "Aurora Drift", "Solid Colour"
+    };
+    if (i < 0 || i >= WALLPAPER_COUNT) return "";
     return n[i];
+}
+
+/* ---- customisation state ------------------------------------------------
+ *  Everything the user can change is kept in one struct and saved to
+ *  /etc/desktop.cfg on a single line, so the settings survive a reboot and can
+ *  be inspected or edited by hand from the shell (`cat /etc/desktop.cfg`).
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    int theme;              /* 0..THEME_COUNT-1                            */
+    int wallpaper;          /* 0..WALLPAPER_COUNT-1                        */
+    u32 solid;              /* custom wallpaper colour (0xRRGGBB)          */
+    int accent;             /* 0 = from theme, 1 = custom                  */
+    u32 accent_color;
+    int font_scale;         /* 0 compact, 1 normal, 2 large                */
+    int crt;                /* scanline overlay                            */
+    int taskbar_h;
+    int transparency;       /* 0..100, window alpha                        */
+    int rounded;            /* corner radius scale, 0..2                   */
+} desktop_cfg_t;
+
+static desktop_cfg_t g_cfg = { 0, 1, 0x101828u, 0, 0, 1, 0, 0, 88, 1 };
+static int g_cfg_loaded;
+
+void desktop_cfg_load(void);
+void desktop_cfg_save(void);
+
+desktop_cfg_t *desktop_cfg(void) {
+    if (!g_cfg_loaded) desktop_cfg_load();
+    return &g_cfg;
+}
+
+/* Parse "key=value" pairs separated by ';' from /etc/desktop.cfg. */
+void desktop_cfg_load(void) {
+    char buf[512];
+    int n;
+    g_cfg_loaded = 1;
+    {
+        u32 out_len = 0;
+        if (vfs_read_text("/etc/desktop.cfg", buf, sizeof(buf) - 1, &out_len) != 0) return;
+        n = (int)out_len;
+        buf[n] = 0;
+    }
+    {
+        char *p = buf;
+        while (*p) {
+            char key[32];
+            int kn = 0, val = 0, neg = 0;
+            while (*p == ' ' || *p == '\n' || *p == ';') p++;
+            if (!*p) break;
+            while (*p && *p != '=' && *p != ';' && kn < 31) key[kn++] = *p++;
+            key[kn] = 0;
+            if (*p == '=') p++;
+            if (*p == '-') { neg = 1; p++; }
+            while (*p >= '0' && *p <= '9') { val = val * 10 + (*p - '0'); p++; }
+            while (*p && *p != ';') p++;
+            if (neg) val = -val;
+            if (!kstrcmp(key, "theme"))      g_cfg.theme = k_clamp(val, 0, 3);
+            else if (!kstrcmp(key, "wallpaper")) g_cfg.wallpaper = k_clamp(val, 0, WALLPAPER_COUNT - 1);
+            else if (!kstrcmp(key, "solid"))     g_cfg.solid = (u32)val;
+            else if (!kstrcmp(key, "accent"))    g_cfg.accent = val ? 1 : 0;
+            else if (!kstrcmp(key, "accent_color")) g_cfg.accent_color = (u32)val;
+            else if (!kstrcmp(key, "font_scale")) g_cfg.font_scale = k_clamp(val, 0, 2);
+            else if (!kstrcmp(key, "crt"))       g_cfg.crt = val ? 1 : 0;
+            else if (!kstrcmp(key, "taskbar_h")) g_cfg.taskbar_h = k_clamp(val, 0, 40);
+            else if (!kstrcmp(key, "transparency")) g_cfg.transparency = k_clamp(val, 0, 100);
+            else if (!kstrcmp(key, "rounded"))   g_cfg.rounded = k_clamp(val, 0, 2);
+        }
+    }
+    /* apply what affects global state immediately */
+    theme_apply(g_cfg.theme);
+    wallpaper_set(g_cfg.wallpaper);
+    gfx_set_scanlines(g_cfg.crt);
+    if (g_cfg.accent) theme_get()->accent = g_cfg.accent_color;
+}
+
+void desktop_cfg_save(void) {
+    char buf[512];
+    ksnprintf(buf, sizeof(buf),
+              "theme=%d;wallpaper=%d;solid=%u;accent=%d;accent_color=%u;"
+              "font_scale=%d;crt=%d;taskbar_h=%d;transparency=%d;rounded=%d;",
+              g_cfg.theme, g_cfg.wallpaper, (unsigned)g_cfg.solid,
+              g_cfg.accent, (unsigned)g_cfg.accent_color,
+              g_cfg.font_scale, g_cfg.crt, g_cfg.taskbar_h,
+              g_cfg.transparency, g_cfg.rounded);
+    vfs_write_string("/etc/desktop.cfg", buf);
+}
+
+/* Convenience setters used by the Control Panel and the shell, each of which
+   saves immediately so a change is never lost. */
+void desktop_set_theme(int i) { desktop_cfg()->theme = k_clamp(i, 0, 3); theme_apply(g_cfg.theme); desktop_cfg_save(); }
+void desktop_set_wallpaper(int i) { desktop_cfg()->wallpaper = k_clamp(i, 0, WALLPAPER_COUNT - 1); wallpaper_set(g_cfg.wallpaper); desktop_cfg_save(); }
+void desktop_set_solid(u32 c) {
+    desktop_cfg()->solid = c; desktop_cfg()->wallpaper = WALLPAPER_COUNT - 1;
+    wallpaper_set(g_cfg.wallpaper); desktop_cfg_save();
+}
+void desktop_set_accent(int on, u32 c) {
+    desktop_cfg()->accent = on; desktop_cfg()->accent_color = c;
+    if (on) theme_get()->accent = c; else theme_apply(g_cfg.theme);
+    wm_invalidate_backdrop();
+    desktop_cfg_save();
+}
+void desktop_set_crt(int on) { desktop_cfg()->crt = on ? 1 : 0; gfx_set_scanlines(g_cfg.crt); desktop_cfg_save(); }
+void desktop_set_font_scale(int i) { desktop_cfg()->font_scale = k_clamp(i, 0, 2); desktop_cfg_save(); }
+void desktop_set_transparency(int v) { desktop_cfg()->transparency = k_clamp(v, 0, 100); desktop_cfg_save(); }
+void desktop_reset(void) {
+    g_cfg.theme = 0; g_cfg.wallpaper = 1; g_cfg.solid = 0x101828u;
+    g_cfg.accent = 0; g_cfg.accent_color = 0x4FC3F7u; g_cfg.font_scale = 1;
+    g_cfg.crt = 0; g_cfg.taskbar_h = 0; g_cfg.transparency = 88; g_cfg.rounded = 1;
+    theme_apply(0); wallpaper_set(1); gfx_set_scanlines(0);
+    desktop_cfg_save();
 }
 
 /* -------------------------------------------------------------------------- */

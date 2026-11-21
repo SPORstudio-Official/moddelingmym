@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-genfont.py -- Procedural font atlas generator for AetherOS.
+genfont.py -- Procedural font atlas generator for AE.
 
 Rasterizes DejaVu faces into packed 1bpp glyph bitmaps (4x4 supersampled) and
 emits them as a C header of static byte arrays, so the final executable has

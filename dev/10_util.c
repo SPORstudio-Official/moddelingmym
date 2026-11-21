@@ -3,7 +3,7 @@
  * ========================================================================== */
 
 
-#ifdef AETHER_ON_WIN32
+#if defined(AETHER_ON_WIN32) || defined(AETHER_WASM)
 /* --------------------------------------------------------------------------
  *  Compiler-generated library calls
  *
@@ -127,6 +127,24 @@ char *kstrchr(const char *s, int c) {
         s++;
     }
     return (c == 0) ? (char *)s : NULL;
+}
+
+const char *kstrstr(const char *h, const char *n) {
+    size_t nl = kstrlen(n);
+    if (!nl) return h;
+    while (*h) {
+        if (*h == *n && !kstrncmp(h, n, nl)) return h;
+        h++;
+    }
+    return NULL;
+}
+
+char *kstrncat(char *d, const char *s, size_t n) {
+    size_t dl = kstrlen(d);
+    size_t i = 0;
+    while (i < n && s[i]) { d[dl + i] = s[i]; i++; }
+    d[dl + i] = 0;
+    return d;
 }
 
 char *kstrrchr(const char *s, int c) {
@@ -331,18 +349,35 @@ int k_min(int a, int b) { return a < b ? a : b; }
 int k_max(int a, int b) { return a > b ? a : b; }
 int k_clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+/* Integer square root by binary search.  Used by the software renderer, which
+ * must not pull in libm's double-precision sqrt for a per-scanline width --
+ * that single call was the hottest instruction stream in the compositor. */
+u32 k_isqrt(u32 v) {
+    u32 r = 0, bit = 1u << 30;
+    while (bit > v) bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Monotonic clock                                                           */
 /* -------------------------------------------------------------------------- */
 
 u64 now_us(void) {
-#ifdef AETHER_ON_WIN32
+#if defined(AETHER_ON_WIN32)
     static LARGE_INTEGER freq;
     static int init = 0;
     LARGE_INTEGER c;
     if (!init) { QueryPerformanceFrequency(&freq); init = 1; }
     QueryPerformanceCounter(&c);
     return (u64)((c.QuadPart * 1000000ULL) / (u64)freq.QuadPart);
+#elif defined(AETHER_WASM)
+    /* performance.now() in the shell, already in microseconds. */
+    return js_now_us();
 #else
     extern u64 host_now_us(void);
     return host_now_us();
@@ -405,7 +440,7 @@ const char *klog_data(u32 *len) {
 double k_sin(double x);
 double k_cos(double x);
 
-#if !defined(AETHER_ON_WIN32) && !defined(AETHER_HOST_MATH_SHIM)
+#if !defined(AETHER_ON_WIN32) && !defined(AETHER_WASM) && !defined(AETHER_HOST_MATH_SHIM)
 /* The host build keeps the libm versions (identical semantics).
    Define AETHER_HOST_MATH_SHIM to build the freestanding versions on the host
    instead, which is how tools/math_check.sh validates them against libm. */
@@ -503,7 +538,7 @@ double k_pow(double b, double e) {
 }
 #endif
 
-#if (defined(AETHER_ON_WIN32) || defined(AETHER_HOST_MATH_SHIM))
+#if (defined(AETHER_ON_WIN32) || defined(AETHER_WASM) || defined(AETHER_HOST_MATH_SHIM))
 /* Reduce to [-pi, pi], then fold into [-pi/2, pi/2] and use the Taylor series
    for sine; cosine is the same series shifted by a quarter period.  Both are
    accurate to well under a pixel at the scales the compositor uses. */

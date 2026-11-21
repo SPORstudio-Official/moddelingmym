@@ -58,7 +58,7 @@ static void *console_create(const char *arg) {
     if (!ct) return NULL;
     kmemset(ct, 0, sizeof(*ct));
     for (i = 0; i < 240 * 140; i++) ct->fb[i] = 0xFF10141C;
-    kstrcpy(ct->log, "AetherOS program console\n"
+    kstrcpy(ct->log, "AE program console\n"
                      "Compile a program with 'cc file.c -o /bin/out' in the shell,\n"
                      "then 'run out' -- its output and drawings appear here.\n\n");
     ct->log_len = (u32)kstrlen(ct->log);

@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  APP: AetherShell -- the terminal
+ *  APP: Crommand -- the terminal
  *
  *  Scrollback ring buffer, command history (Up/Down), blinking cursor,
  *  colour-coded output and the full command set (file ops, process/memory
@@ -69,6 +69,17 @@ static void sh_emit(shell_t *sh, u8 color, const char *text) {
         ln->color = cur;
         used = 0;
         while (text[i] && text[i] != '\n') {
+            /* Colour markers are stripped anywhere in the line, not just at the
+               start of one.  Only the outer loop used to consume them, so any
+               marker embedded mid-line was copied into the line buffer and then
+               rendered as '?' by the font -- which is why every prompt read
+               "user@aether??:/home/user$": the \x07 end-of-colour and the \x02
+               of the second colour span both came out as question marks. */
+            if ((u8)text[i] >= 1 && (u8)text[i] <= 8) {
+                cur = (u8)text[i];
+                i++;
+                continue;
+            }
             if (used >= TERM_COLS - 1) {
                 /* wrap */
                 ln->text[used] = 0;
@@ -82,6 +93,7 @@ static void sh_emit(shell_t *sh, u8 color, const char *text) {
                 ln->color = cur;
                 used = 0;
             }
+            ln->color = cur;
             ln->text[used++] = text[i++];
         }
         ln->text[used] = 0;
@@ -103,9 +115,8 @@ static void sh_printf(shell_t *sh, u8 color, const char *fmt, ...) {
 static void sh_prompt(shell_t *sh) {
     char buf[400];
     const char *user = "user";
-    ksnprintf(buf, sizeof(buf), "\x02%s@aether\x07:\x02%s\x07$ ", user, sh->cwd);
+    ksnprintf(buf, sizeof(buf), "\x02%s@ae\x07:\x02%s\x07$ ", user, sh->cwd);
     sh_emit(sh, TC_DEFAULT, buf);
-    sh->nlines ? (sh->lines[sh->nlines - 1].is_prompt = 1) : 0;
     if (sh->nlines) sh->lines[sh->nlines - 1].is_prompt = 1;
 }
 
@@ -146,8 +157,284 @@ static void sh_absolute(shell_t *sh, const char *in, char *out, size_t n) {
 /*  command implementations                                                 */
 /* -------------------------------------------------------------------------- */
 
+
+/* -------------------------------------------------------------------------- */
+/*  Crommand's own commands                                                 */
+/*                                                                            */
+/*  Everything above is a Unix command that had to exist for the shell to be   */
+/*  usable.  These are the commands that belong to this machine: they read the */
+/*  kernel's own state, drive its own subsystems, or answer questions that only */
+/*  an operating system with a compiler and a window manager inside it can.    */
+/* -------------------------------------------------------------------------- */
+
+/* `peek <file> [lines]` -- the first N lines, without pouring a 40 KB manual
+   over a 24-row terminal.  `cat` is for files; `peek` is for reading. */
+static void cmd_peek(shell_t *sh, int argc, char **argv) {
+    if (argc < 2) { sh_emit(sh, TC_RED, "usage: peek <file> [lines]\n"); return; }
+    {
+        int max = 12, i, shown = 0;
+        u32 len = 0;
+        const char *err = NULL;
+        char *data;
+        if (argc > 2) { max = katoi(argv[2]); if (max <= 0) max = 12; }
+        data = vfs_read_alloc(argv[1], &len, &err);
+        if (!data) { sh_printf(sh, TC_RED, "peek: %s: %s\n", argv[1], err ? err : "error"); return; }
+        for (i = 0; data[i] && shown < max; i++) {
+            char line[TERM_COLS + 1];
+            int n = 0;
+            while (data[i] && data[i] != '\n' && n < TERM_COLS) line[n++] = data[i++];
+            line[n] = 0;
+            if (data[i] == '\n') i++;
+            sh_emit(sh, TC_DEFAULT, line);
+            sh_emit(sh, TC_DEFAULT, "\n");
+            shown++;
+        }
+        if (data[i]) sh_printf(sh, TC_GREY, "... %u bytes total, %d lines shown (peek <%s> 0 for all)\n",
+                               (unsigned)len, shown, argv[1]);
+        mm_kfree(data);
+    }
+}
+
+/* `uptime` exists; `since` is the more useful question: what has happened in
+   this session.  It reads the same counters the System Monitor does. */
+static void cmd_since(shell_t *sh) {
+    u32 up = now_ms();
+    wm_state_t *wm = wm_state();
+    sh_printf(sh, TC_CYAN, "this session, %u.%02u s in\n", up / 1000, (up % 1000) / 10);
+    sh_printf(sh, TC_DEFAULT, "  frames rendered   %u\n", (unsigned)wm->frames);
+    sh_printf(sh, TC_DEFAULT, "  windows open      %d\n", wm_window_count());
+    sh_printf(sh, TC_DEFAULT, "  paths in the VFS  %d\n", vfs_dir_count("/"));
+    sh_printf(sh, TC_DEFAULT, "  fd table          %d open\n", vfs_fd_count());
+    sh_printf(sh, TC_DEFAULT, "  commands typed    %d\n", sh->total_cmds);
+    sh_printf(sh, TC_GREY, "  (the frame counter is the compositor's, not the clock's)\n");
+}
+
+/* `biggest [path]` -- where the disk actually went.  `df` says how full it is;
+   this says what filled it.  Walks the tree and reports the largest files. */
+static void cmd_biggest(shell_t *sh, int argc, char **argv) {
+    const char *root = argc > 1 ? argv[1] : "/";
+    struct { char path[96]; u32 size; } top[8];
+    int i, j;
+    int ndirs = 1, walked = 0;
+    /* File scope, not automatic: a frame over 4 KB needs ___chkstk_ms on
+       Win64 and the freestanding kernel link has no provider for it. */
+    static char queue[32][VFS_MAX_PATH];
+    kmemset(top, 0, sizeof(top));
+    kstrncpy(queue[0], root, sizeof(queue[0]) - 1);
+    while (ndirs > 0 && walked < 400) {
+        char cur[VFS_MAX_PATH];
+        int n;
+        ndirs--;
+        kstrcpy(cur, queue[ndirs]);
+        walked++;
+        n = vfs_dir_count(cur);
+        for (i = 0; i < n; i++) {
+            vfs_dirent_t d;
+            char full[VFS_MAX_PATH];
+            vfs_inode_t st;
+            if (vfs_dir_get(cur, i, &d) != 0) break;
+            if (!kstrcmp(d.name, ".") || !kstrcmp(d.name, "..")) continue;
+            ksnprintf(full, sizeof(full), "%s/%s", kstrcmp(cur, "/") ? cur : "", d.name);
+            kmemset(&st, 0, sizeof(st));
+            if (vfs_stat_path(full, &st) != 0) continue;
+            if (d.type == FT_DIR) {
+                if (ndirs < 32) { kstrncpy(queue[ndirs], full, sizeof(queue[ndirs]) - 1); ndirs++; }
+            } else {
+                /* insert into the top-8 by size */
+                for (j = 0; j < 8; j++) {
+                    if (st.size > top[j].size) {
+                        int k;
+                        for (k = 7; k > j; k--) top[k] = top[k - 1];
+                        kstrncpy(top[j].path, full, sizeof(top[j].path) - 1);
+                        top[j].size = st.size;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    sh_printf(sh, TC_GREY, "largest files under %s (%d directories walked)\n", root, walked);
+    for (i = 0; i < 8; i++) {
+        if (!top[i].size) break;
+        sh_printf(sh, TC_DEFAULT, "  %6u  %s\n", (unsigned)top[i].size, top[i].path);
+    }
+    if (!top[0].size) sh_emit(sh, TC_GREY, "  (nothing here)\n");
+}
+
+/* `grep <pattern> <file...>` -- searching a manual with no search tool is
+   miserable.  Plain substring match, because that is what people type. */
+static void cmd_grep(shell_t *sh, int argc, char **argv) {
+    int f, hits = 0;
+    if (argc < 3) { sh_emit(sh, TC_RED, "usage: grep <pattern> <file...>\n"); return; }
+    for (f = 2; f < argc; f++) {
+        u32 len = 0;
+        const char *err = NULL;
+        char *data = vfs_read_alloc(argv[f], &len, &err);
+        int lineno = 1, i;
+        if (!data) { sh_printf(sh, TC_RED, "grep: %s: %s\n", argv[f], err ? err : "error"); continue; }
+        for (i = 0; data[i]; i++) {
+            int ls = i;
+            char line[TERM_COLS + 1];
+            int n = 0;
+            while (data[i] && data[i] != '\n' && n < TERM_COLS) line[n++] = data[i++];
+            line[n] = 0;
+            if (kstrstr(line, argv[1])) {
+                sh_printf(sh, TC_DEFAULT, "%s:%d: %s\n", argv[f], lineno, line);
+                hits++;
+            }
+            if (!data[i]) break;
+            lineno++;
+            (void)ls;
+        }
+        mm_kfree(data);
+    }
+    if (!hits) sh_emit(sh, TC_GREY, "(no matches)\n");
+    else sh_printf(sh, TC_GREY, "%d matching line%s\n", hits, hits == 1 ? "" : "s");
+}
+
+/* `bench` -- measure this machine from inside it.  Nothing else in the system
+   can tell you how fast the compositor or the heap is, because nothing else
+   knows where they are. */
+static void cmd_bench(shell_t *sh) {
+    u32 i, t0, t1, t2;
+    volatile u32 sink = 0;
+    sh_emit(sh, TC_CYAN, "benchmarking this machine\n");
+    /* heap: 2000 alloc/free pairs */
+    t0 = now_ms();
+    for (i = 0; i < 2000; i++) {
+        void *p = mm_kmalloc(64 + (i & 255));
+        if (p) { sink += (u32)(uintptr_t)p; mm_kfree(p); }
+    }
+    t1 = now_ms();
+    sh_printf(sh, TC_DEFAULT, "  heap     2000 alloc/free   %4u ms\n", (unsigned)(t1 - t0));
+    /* integer + float maths */
+    {
+        double acc = 0.0;
+        t0 = now_ms();
+        for (i = 1; i < 20001; i++) acc += k_sqrt((double)i);
+        t1 = now_ms();
+        sh_printf(sh, TC_DEFAULT, "  maths    20000 sqrt()       %4u ms (sum %u)\n",
+                  (unsigned)(t1 - t0), (unsigned)acc);
+    }
+    /* VFS: 400 small writes + reads */
+    t0 = now_ms();
+    for (i = 0; i < 400; i++) {
+        char path[64];
+        char body[32];
+        ksnprintf(path, sizeof(path), "/tmp/bench_%u", (unsigned)i);
+        ksnprintf(body, sizeof(body), "%u", (unsigned)i);
+        vfs_write_string(path, body);
+    }
+    t1 = now_ms();
+    for (i = 0; i < 400; i++) {
+        char path[64];
+        ksnprintf(path, sizeof(path), "/tmp/bench_%u", (unsigned)i);
+        sink += vfs_resolve(path);
+    }
+    t2 = now_ms();
+    sh_printf(sh, TC_DEFAULT, "  vfs      400 write / 400 lookup  %4u / %4u ms\n",
+              (unsigned)(t1 - t0), (unsigned)(t2 - t1));
+    sh_printf(sh, TC_GREY, "  (clean up with: rm /tmp/bench_*)\n");
+}
+
+/* `note <text>` / `notes` -- a scratchpad that survives leaving the shell, kept
+   in /home/user/notes.txt so the editor and Files can see it too. */
+static void cmd_note(shell_t *sh, int argc, char **argv) {
+    const char *path = "/home/user/notes.txt";
+    if (argc < 2) {
+        u32 len = 0;
+        const char *err = NULL;
+        char *data = vfs_read_alloc(path, &len, &err);
+        if (!data) { sh_emit(sh, TC_GREY, "no notes yet -- `note <text>` writes the first\n"); return; }
+        sh_emit(sh, TC_DEFAULT, data);
+        mm_kfree(data);
+        return;
+    }
+    {
+        char text[TERM_CMD_LEN];
+        char *old = NULL;
+        u32 len = 0;
+        const char *err = NULL;
+        int i;
+        text[0] = 0;
+        for (i = 1; i < argc && (int)kstrlen(text) < (int)sizeof(text) - 2; i++) {
+            if (i > 1) kstrcat(text, " ");
+            kstrncat(text, argv[i], sizeof(text) - 1 - (int)kstrlen(text));
+        }
+        old = vfs_read_alloc(path, &len, &err);
+        {
+            char *merged = (char *)mm_kmalloc((old ? len : 0) + kstrlen(text) + 8);
+            if (!merged) { if (old) mm_kfree(old); sh_emit(sh, TC_RED, "out of memory\n"); return; }
+            merged[0] = 0;
+            if (old) { kmemcpy(merged, old, len); merged[len] = 0; mm_kfree(old); }
+            kstrcat(merged, " - ");
+            kstrcat(merged, text);
+            kstrcat(merged, "\n");
+            if (vfs_write_string(path, merged) == 0)
+                sh_printf(sh, TC_GREEN, "noted (%u bytes in %s)\n",
+                          (unsigned)kstrlen(merged), path);
+            mm_kfree(merged);
+        }
+    }
+}
+
+/* `grab` -- save the screen.  The compositor owns the framebuffer, so it can
+   hand over the exact pixels on display, which is how a screenshot can exist
+   inside a machine that has no camera and no files from outside. */
+static void cmd_grab(shell_t *sh, int argc, char **argv) {
+    const char *path = argc > 1 ? argv[1] : "/home/user/screen.ppm";
+    u32 *fb = hal_vram();
+    int x, y;
+    u32 px = SCREEN_W * SCREEN_H;
+    char *buf = (char *)mm_kmalloc(px * 3 + 64);
+    int n;
+    if (!fb || !buf) { sh_emit(sh, TC_RED, "grab: no framebuffer available\n"); return; }
+    n = ksnprintf(buf, 64, "P6\n%d %d\n255\n", SCREEN_W, SCREEN_H);
+    for (y = 0; y < SCREEN_H; y++) {
+        for (x = 0; x < SCREEN_W; x++) {
+            u32 c = fb[y * SCREEN_W + x];
+            buf[n++] = (char)RED(c);
+            buf[n++] = (char)GREEN(c);
+            buf[n++] = (char)BLUE(c);
+        }
+    }
+    if (vfs_write_file(path, buf, (u32)n) == 0)
+        sh_printf(sh, TC_GREEN, "screen saved to %s (%d bytes, PPM)\n", path, n);
+    else
+        sh_emit(sh, TC_RED, "grab: the disk is full\n");
+    mm_kfree(buf);
+}
+
+/* `where <file>` -- which directory holds this name.  `find` takes a name and
+   searches from here; `where` takes a name and tells you the path. */
+static void cmd_where(shell_t *sh, int argc, char **argv) {
+    static char queue[24][VFS_MAX_PATH];   /* see cmd_biggest: keep frames < 4 KB */
+    int nq = 1, seen = 0;
+    if (argc < 2) { sh_emit(sh, TC_RED, "usage: where <name>\n"); return; }
+    kstrcpy(queue[0], "/");
+    while (nq > 0 && seen < 300) {
+        char cur[VFS_MAX_PATH];
+        int n, i;
+        nq--;
+        kstrcpy(cur, queue[nq]);
+        seen++;
+        n = vfs_dir_count(cur);
+        for (i = 0; i < n; i++) {
+            vfs_dirent_t d;
+            char full[VFS_MAX_PATH];
+            if (vfs_dir_get(cur, i, &d) != 0) break;
+            if (!kstrcmp(d.name, ".") || !kstrcmp(d.name, "..")) continue;
+            ksnprintf(full, sizeof(full), "%s/%s", kstrcmp(cur, "/") ? cur : "", d.name);
+            if (!kstrncmp(d.name, argv[1], kstrlen(argv[1])))
+                sh_printf(sh, TC_DEFAULT, "  %s%s\n", full, d.type == FT_DIR ? "/" : "");
+            if (d.type == FT_DIR && nq < 24) { kstrncpy(queue[nq], full, sizeof(queue[nq]) - 1); nq++; }
+        }
+    }
+    if (!seen) sh_emit(sh, TC_GREY, "(nothing found)\n");
+}
+
 static void cmd_help(shell_t *sh) {
-    sh_printf(sh, TC_CYAN, "AetherShell " AETHER_VERSION_STR " -- command reference\n");
+    sh_printf(sh, TC_CYAN, "Crommand " AE_VERSION_STR " -- command reference\n");
     sh_emit(sh, TC_GREY,
         "  FILE            ls [-l] [path]   cd <dir>   pwd   cat <file>   touch <file>\n"
         "                  mkdir <dir>      rm <file>  cp <a> <b>   mv <a> <b>\n"
@@ -156,8 +443,21 @@ static void cmd_help(shell_t *sh) {
         "  PROCESS/MEMORY  ps   top   kill <pid>   free   memmap   spawn <app>\n"
         "                  uptime   uname -a   dmesg   syscalls   irq\n"
         "  COMPILER        cc <src.c> [-o <out>]   run <prog>   disasm <src.c>\n"
+        "  CUSTOMISE       theme <0-3>  wallpaper <0-5>  accent <rrggbb|off>\n"
+        "                  font <0-2>   crt <0|1>   customise   resetprefs\n"
+        "  WEB             browser [url]   (also: web <url>)\n"
         "  SYSTEM          clear   theme <0-3>   wallpaper <0-3>   reboot   panic\n"
         "                  help    apps   about   exit\n");
+    sh_emit(sh, TC_GREEN, "  -- Crommand's own --\n");
+    sh_emit(sh, TC_GREY,
+        "  peek <file> [n]  read the first lines of a file (n=0 means all)\n"
+        "  grep <pattern> <file...>   find lines that contain a word\n"
+        "  where <name>     print every path whose name starts with <name>\n"
+        "  biggest [path]   the largest files on the disk, biggest first\n"
+        "  since            what has happened in this session, in numbers\n"
+        "  bench            time the heap, the maths and the file system here\n"
+        "  grab [file.ppm]  save the screen as a picture\n"
+        "  note [text]      a scratchpad kept in /home/user/notes.txt\n");
 }
 
 static void cmd_ls(shell_t *sh, int argc, char **argv) {
@@ -368,14 +668,14 @@ static void cmd_top(shell_t *sh) {
 
 static void cmd_uname(shell_t *sh, int argc, char **argv) {
     if (argc > 1 && !kstrcmp(argv[1], "-a")) {
-        sh_printf(sh, TC_GREEN, "AetherOS aether 1.0.0-aether #1 SMP PREEMPT x86_64 Virtual\n");
+        sh_printf(sh, TC_GREEN, "AE aether 1.0.0-aether #1 SMP PREEMPT x86_64 Virtual\n");
         sh_printf(sh, TC_DEFAULT, "kernel: monolithic hybrid, 32-bit protected mode (emulated)\n");
         sh_printf(sh, TC_DEFAULT, "cpu: %s\n", g_machine.cpu_name);
         sh_printf(sh, TC_DEFAULT, "timer: %u Hz, ram: %u MiB, heap: %u MiB, ramdisk: %u MiB\n",
                   (unsigned)irq_hz(), (unsigned)(PHYS_RAM_SIZE / (1024 * 1024)),
                   (unsigned)(HEAP_SIZE / (1024 * 1024)), (unsigned)(DISK_SIZE / (1024 * 1024)));
     } else {
-        sh_emit(sh, TC_DEFAULT, "AetherOS\n");
+        sh_emit(sh, TC_DEFAULT, "AE\n");
     }
 }
 
@@ -648,7 +948,7 @@ static int cmd_execute(shell_t *sh, char *line) {
        nothing silently does the wrong thing */
     for (i = 1; i < argc; i++) {
         if (!kstrcmp(argv[i], "|") || !kstrcmp(argv[i], ">")) {
-            sh_printf(sh, TC_YELLOW, "sh: '%s' is not supported by AetherShell (no pipes)\n", argv[i]);
+            sh_printf(sh, TC_YELLOW, "sh: '%s' is not supported by Crommand (no pipes)\n", argv[i]);
             return 0;
         }
     }
@@ -724,6 +1024,14 @@ static int cmd_execute(shell_t *sh, char *line) {
     if (!kstrcmp(cmd, "hexdump") || !kstrcmp(cmd, "hexview")) { cmd_hexdump(sh, argc, argv); return 0; }
     if (!kstrcmp(cmd, "stat")) { cmd_stat(sh, argc, argv); return 0; }
     if (!kstrcmp(cmd, "df")) { cmd_df(sh, argc, argv); return 0; }
+    if (!kstrcmp(cmd, "peek")) { cmd_peek(sh, argc, argv); return 0; }
+    if (!kstrcmp(cmd, "since")) { cmd_since(sh); return 0; }
+    if (!kstrcmp(cmd, "biggest")) { cmd_biggest(sh, argc, argv); return 0; }
+    if (!kstrcmp(cmd, "grep")) { cmd_grep(sh, argc, argv); return 0; }
+    if (!kstrcmp(cmd, "bench")) { cmd_bench(sh); return 0; }
+    if (!kstrcmp(cmd, "note") || !kstrcmp(cmd, "notes")) { cmd_note(sh, argc, argv); return 0; }
+    if (!kstrcmp(cmd, "grab") || !kstrcmp(cmd, "screenshot")) { cmd_grab(sh, argc, argv); return 0; }
+    if (!kstrcmp(cmd, "where")) { cmd_where(sh, argc, argv); return 0; }
     if (!kstrcmp(cmd, "tree")) { cmd_tree(sh, argc > 1 ? argv[1] : ".", 0); return 0; }
     if (!kstrcmp(cmd, "find")) {
         if (argc < 2) { sh_emit(sh, TC_RED, "usage: find <name>\n"); return 0; }
@@ -770,9 +1078,75 @@ static int cmd_execute(shell_t *sh, char *line) {
     }
     if (!kstrcmp(cmd, "theme")) {
         int idx = argc > 1 ? katoi(argv[1]) : (theme_index() + 1) % 4;
-        theme_apply(idx);
-        sh_printf(sh, TC_GREEN, "theme %d: %s\n", theme_index(), theme_get()->name);
+        desktop_set_theme(idx);
+        sh_printf(sh, TC_GREEN, "theme %d: %s  (saved)\n", theme_index(), theme_get()->name);
         notify(theme_get()->name);
+        return 0;
+    }
+    if (!kstrcmp(cmd, "accent")) {
+        /* accent [rrggbb | off] -- picks the highlight colour every app uses */
+        if (argc < 2) {
+            sh_printf(sh, TC_GREY, "accent is %s\n",
+                      desktop_cfg()->accent ? "custom" : "from the theme");
+            return 0;
+        }
+        if (!kstrcmp(argv[1], "off")) {
+            desktop_set_accent(0, 0);
+            sh_emit(sh, TC_GREEN, "accent follows the theme again\n");
+            return 0;
+        }
+        {
+            int ok = 0;
+            u32 v = kstrtoul(argv[1][0] == '#' ? argv[1] + 1 : argv[1], 16, &ok);
+            if (!ok) { sh_emit(sh, TC_RED, "accent: expected a hex colour like 4fc3f7\n"); return 0; }
+            desktop_set_accent(1, v);
+            sh_printf(sh, TC_GREEN, "accent set to #%06x (saved)\n", (unsigned)v);
+        }
+        return 0;
+    }
+    if (!kstrcmp(cmd, "fontscale") || !kstrcmp(cmd, "font")) {
+        int i = argc > 1 ? katoi(argv[1]) : (desktop_cfg()->font_scale + 1) % 3;
+        static const char *names[3] = { "compact", "normal", "large" };
+        desktop_set_font_scale(i);
+        sh_printf(sh, TC_GREEN, "interface scale: %s (saved)\n", names[desktop_cfg()->font_scale]);
+        return 0;
+    }
+    if (!kstrcmp(cmd, "crt")) {
+        desktop_set_crt(argc > 1 ? katoi(argv[1]) : !gfx_scanlines_enabled());
+        sh_printf(sh, TC_GREEN, "CRT shader %s (saved)\n",
+                  gfx_scanlines_enabled() ? "on" : "off");
+        return 0;
+    }
+    if (!kstrcmp(cmd, "customise") || !kstrcmp(cmd, "customize") || !kstrcmp(cmd, "prefs")) {
+        desktop_cfg_t *c = desktop_cfg();
+        sh_emit(sh, TC_CYAN, "current desktop settings (/etc/desktop.cfg)\n");
+        sh_printf(sh, TC_GREY, "  theme         %d  %s\n", c->theme, theme_name(c->theme));
+        sh_printf(sh, TC_GREY, "  wallpaper     %d  %s\n", c->wallpaper, wallpaper_name(c->wallpaper));
+        sh_printf(sh, TC_GREY, "  accent        %s #%06x\n", c->accent ? "custom" : "theme ",
+                  (unsigned)(c->accent ? c->accent_color : theme_get()->accent));
+        sh_printf(sh, TC_GREY, "  font scale    %d  (0 compact, 1 normal, 2 large)\n", c->font_scale);
+        sh_printf(sh, TC_GREY, "  CRT shader    %s\n", gfx_scanlines_enabled() ? "on" : "off");
+        sh_printf(sh, TC_GREY, "  transparency  %d%%\n", c->transparency);
+        sh_emit(sh, TC_GREY, "  change with: theme N  wallpaper N  accent RRGGBB  crt 0|1  font 0-2\n");
+        sh_emit(sh, TC_GREY, "  reset      : resetprefs\n");
+        return 0;
+    }
+    if (!kstrcmp(cmd, "resetprefs")) {
+        desktop_reset();
+        sh_emit(sh, TC_GREEN, "desktop settings restored to defaults\n");
+        notify("Settings reset");
+        return 0;
+    }
+    if (!kstrcmp(cmd, "browser") || !kstrcmp(cmd, "web")) {
+        const app_desc_t *d = app_by_id("browser");
+        if (!d) { sh_emit(sh, TC_RED, "browser: not registered\n"); return 0; }
+        if (argc > 1) {
+            wm_open_app(d, argv[1]);
+            sh_printf(sh, TC_GREEN, "opening %s\n", argv[1]);
+        } else {
+            wm_open_app(d, NULL);
+            sh_emit(sh, TC_GREEN, "opening the browser\n");
+        }
         return 0;
     }
     if (!kstrcmp(cmd, "wallpaper")) {
@@ -782,7 +1156,7 @@ static int cmd_execute(shell_t *sh, char *line) {
         return 0;
     }
     if (!kstrcmp(cmd, "reboot")) {
-        sh_emit(sh, TC_YELLOW, "rebooting the AetherOS kernel...\n");
+        sh_emit(sh, TC_YELLOW, "rebooting the AE kernel...\n");
         wm_state()->reboot_requested = 1;
         return 0;
     }
@@ -797,7 +1171,7 @@ static int cmd_execute(shell_t *sh, char *line) {
         return 0;
     }
     if (!kstrcmp(cmd, "about")) {
-        sh_printf(sh, TC_CYAN, "AetherOS %s \"%s\"\n", AETHER_VERSION_STR, AETHER_CODENAME);
+        sh_printf(sh, TC_CYAN, "AE %s \"%s\"\n", AE_VERSION_STR, AE_CODENAME);
         sh_emit(sh, TC_DEFAULT,
             "Single-executable operating system: HAL, memory manager, inode VFS,\n"
             "scheduler, syscalls, compiler, VM, compositor and seven apps all live\n"
@@ -806,7 +1180,7 @@ static int cmd_execute(shell_t *sh, char *line) {
         return 0;
     }
     if (!kstrcmp(cmd, "sysinfo") || !kstrcmp(cmd, "neofetch")) {
-        sh_emit(sh, TC_CYAN, "        /\\        AetherOS " AETHER_VERSION_STR "\n");
+        sh_emit(sh, TC_CYAN, "        /\\        AE " AE_VERSION_STR "\n");
         sh_emit(sh, TC_CYAN, "       /  \\       ------------------\n");
         sh_emit(sh, TC_CYAN, "      / /\\ \\      kernel   : monolithic hybrid (emulated 32-bit)\n");
         sh_emit(sh, TC_CYAN, "     / ____ \\     cpu      : ");
@@ -854,7 +1228,7 @@ static void *shell_create(const char *arg) {
     kmemset(sh, 0, sizeof(*sh));
     kstrcpy(sh->cwd, vfs_cwd());
     sh->blink_on = 1;
-    sh_emit(sh, TC_CYAN, "AetherShell " AETHER_VERSION_STR "  (AetherOS " AETHER_CODENAME ")\n");
+    sh_emit(sh, TC_CYAN, "Crommand " AE_VERSION_STR "  (AE " AE_CODENAME ")\n");
     sh_emit(sh, TC_GREY, "Type 'help' for commands, 'apps' for programs, 'sysinfo' for a summary.\n\n");
     {
         u32 len = 0;
@@ -873,14 +1247,129 @@ static void *shell_create(const char *arg) {
 }
 
 static void shell_destroy(void *state) { if (state) mm_kfree(state); }
+/* Tab completion -----------------------------------------------------------
+   The old implementation only compared the whole input line against the names
+   in the current directory, so "cat A" could never complete "AE64/" and
+   "cd /home/us" never completed at all.  This version completes the *token*
+   under the caret: the text before the last '/' is treated as a directory
+   prefix, the remainder as the name fragment, and every match is listed when
+   the choice is ambiguous. */
+static void sh_complete(shell_t *sh) {
+    char token[TERM_CMD_LEN];
+    char dir[VFS_MAX_PATH];
+    const char *name;
+    int start = sh->cursor, n = 0, matches = 0, i, dircount;
+    char last[VFS_MAX_NAME + 2];
+
+    /* find the start of the token under the caret */
+    while (start > 0 && sh->input[start - 1] != ' ' && sh->input[start - 1] != '\t') start--;
+    kstrncpy(token, sh->input + start, (int)sizeof(token) - 1);
+    token[sh->cursor - start < (int)sizeof(token) ? sh->cursor - start : (int)sizeof(token) - 1] = 0;
+
+    /* split "some/dir/fra" into "some/dir" + "fra" */
+    {
+        char *slash = NULL;
+        char *q;
+        for (q = token; *q; q++) if (*q == '/') slash = q;
+        if (slash) {
+            size_t dl = (size_t)(slash - token);
+            if (dl == 0) { kstrcpy(dir, "/"); }
+            else {
+                if (dl >= sizeof(dir)) dl = sizeof(dir) - 1;
+                kmemcpy(dir, token, dl);
+                dir[dl] = 0;
+            }
+            name = slash + 1;
+        } else {
+            kstrcpy(dir, ".");
+            name = token;
+        }
+    }
+
+    dircount = vfs_dir_count(dir);
+    if (dircount < 0) return;
+    last[0] = 0;
+    for (i = 0; i < dircount; i++) {
+        vfs_dirent_t d;
+        if (vfs_dir_get(dir, i, &d) != 0) break;
+        if (!kstrcmp(d.name, ".") || !kstrcmp(d.name, "..")) continue;
+        n = (int)kstrlen(name);
+        if (n && kstrncmp(d.name, name, n)) continue;
+        kstrncpy(last, d.name, sizeof(last) - 2);
+        last[sizeof(last) - 2] = 0;
+        matches++;
+        if (matches > 1) break;
+    }
+    if (matches == 1) {
+        char add[VFS_MAX_NAME + 8];
+        char full[VFS_MAX_PATH];
+        int have = (int)kstrlen(name);
+        vfs_inode_t st;
+        int isdir = 0;
+        kmemset(&st, 0, sizeof(st));
+        ksnprintf(full, sizeof(full), "%s/%s", dir, last);
+        if (vfs_stat_path(full, &st) == 0) isdir = (st.type == FT_DIR);
+        /* Only the part that has not been typed yet is inserted: appending the
+           whole name produced "cd Ae6AE64/" instead of "cd AE64/". */
+        if (have > (int)kstrlen(last)) have = (int)kstrlen(last);
+        ksnprintf(add, sizeof(add), "%s%s", last + have, isdir ? "/" : "");
+        {
+            int addlen = (int)kstrlen(add);
+            int tail = sh->input_len - sh->cursor;
+            if (sh->cursor + addlen + tail < TERM_CMD_LEN - 2) {
+                kmemmove(sh->input + sh->cursor + addlen, sh->input + sh->cursor,
+                         (size_t)(tail + 1));
+                kmemcpy(sh->input + sh->cursor, add, (size_t)addlen);
+                sh->cursor += addlen;
+                sh->input_len += addlen;
+            }
+        }
+        return;
+    }
+    /* ambiguous or nothing: list what does match, then redraw the prompt */
+    if (matches > 1) {
+        char line[TERM_COLS * 2];
+        line[0] = 0;
+        for (i = 0; i < dircount; i++) {
+            vfs_dirent_t d;
+            n = (int)kstrlen(name);
+            if (vfs_dir_get(dir, i, &d) != 0) break;
+            if (!kstrcmp(d.name, ".") || !kstrcmp(d.name, "..")) continue;
+            if (n && kstrncmp(d.name, name, n)) continue;
+            if ((int)kstrlen(line) + (int)kstrlen(d.name) + 3 >= TERM_COLS) {
+                sh_emit(sh, TC_GREY, line);
+                sh_emit(sh, TC_GREY, "\n");
+                line[0] = 0;
+            }
+            kstrcat(line, d.name);
+            kstrcat(line, "  ");
+        }
+        if (line[0]) { sh_emit(sh, TC_GREY, line); sh_emit(sh, TC_GREY, "\n"); }
+    }
+}
+
+
+
+/* The prompt that is waiting for input is not scrollback: it is repainted from
+   scratch on every frame by shell_paint(), carrying the current input text and
+   the caret.  Counting it as a scrollback line drew it twice. */
+static int last_line_is_prompt(shell_t *sh) {
+    return sh->nlines > 0 && sh->lines[sh->nlines - 1].is_prompt;
+}
 
 static void shell_paint(void *state, window_t *w, wm_rect_t client) {
     shell_t *sh = (shell_t *)state;
     theme_t *t = theme_get();
     int rows = (client.h - 18) / FONT_TERM_H;
-    int first = sh->nlines - rows - sh->scroll;
-    int i;
+    int live = last_line_is_prompt(sh);
+    int count = sh->nlines - live;
+    int first, i;
     if (rows < 1) rows = 1;
+    /* The trailing empty prompt line is drawn as the live input line below, so
+       it must not also be painted into the scrollback.  It used to be, which put
+       two identical prompts on screen as soon as a command produced enough
+       output to scroll the buffer. */
+    first = count - rows - sh->scroll;
     if (first < 0) first = 0;
 
     gfx_fill_rect(client.x, client.y, client.w, client.h, RGBA(8, 12, 18, 252));
@@ -891,7 +1380,7 @@ static void shell_paint(void *state, window_t *w, wm_rect_t client) {
         int li = first + i;
         int y = client.y + 6 + i * FONT_TERM_H;
         u32 col = t->text;
-        if (li >= sh->nlines) break;
+        if (li >= count) break;
         switch (sh->lines[li].color) {
         case TC_GREEN: col = t->ok; break;
         case TC_CYAN: col = t->info; break;
@@ -916,10 +1405,10 @@ static void shell_paint(void *state, window_t *w, wm_rect_t client) {
             y = client.y + client.h - FONT_TERM_H - 2;
             gfx_fill_rect(client.x + 2, y - 2, client.w - 4, FONT_TERM_H + 2, RGBA(10, 14, 22, 255));
         }
-        /* coloured prompt: "user@aether:" + cwd + " $ " then the input line,
+        /* coloured prompt: "user@ae:" + cwd + " $ " then the input line,
            laid out from one running x so the caret always lines up. */
         int px = client.x + 8;
-        const char *pre = "user@aether:";
+        const char *pre = "user@ae:";
         ksnprintf(buf, sizeof(buf), "%s", "");
         gfx_text_term(px, y, pre, t->ok, 0, 0);
         px += (int)kstrlen(pre) * FONT_TERM_W;
@@ -938,7 +1427,7 @@ static void shell_paint(void *state, window_t *w, wm_rect_t client) {
     /* scrollbar */
     {
         int sbx = client.x + client.w - 8;
-        int total = sh->nlines + 1;
+        int total = count + 1;
         int thumb = k_max(20, client.h * rows / k_max(total, 1));
         int pos = (int)((long)(client.h - thumb) * sh->scroll / k_max(1, total - rows));
         gfx_fill_rect(sbx, client.y, 8, client.h, RGBA(0, 0, 0, 90));
@@ -959,7 +1448,7 @@ static void shell_exec(shell_t *sh) {
     {
         /* echo the typed line into the scrollback as a completed prompt line */
         char echo[TERM_CMD_LEN + 320];
-        ksnprintf(echo, sizeof(echo), "user@aether:%s$ %s", sh->cwd, sh->input);
+        ksnprintf(echo, sizeof(echo), "user@ae:%s$ %s", sh->cwd, sh->input);
         if (sh->nlines > 0 && sh->lines[sh->nlines - 1].is_prompt) sh->nlines--;
         sh_emit(sh, TC_DEFAULT, echo);
         sh_emit(sh, TC_DEFAULT, "\n");
@@ -1011,26 +1500,10 @@ static void shell_key(void *state, int key, int ch, int mods) {
         }
         return;
     }
-    if (key == 0x21) { sh->scroll = k_min(sh->scroll + 4, k_max(0, sh->nlines)); return; }
+    if (key == 0x21) { sh->scroll = k_min(sh->scroll + 4, k_max(0, sh->nlines - 1)); return; }
     if (key == 0x22) { sh->scroll = k_max(0, sh->scroll - 4); return; }
     if (key == 0x09) {                                  /* tab completion */
-        int i, n = vfs_dir_count(".");
-        int matches = 0;
-        char last[TERM_CMD_LEN];
-        for (i = 0; i < n; i++) {
-            vfs_dirent_t d;
-            if (vfs_dir_get(".", i, &d) != 0) break;
-            if (!kstrncmp(d.name, sh->input, kstrlen(sh->input)) && kstrlen(sh->input)) {
-                kstrncpy(last, d.name, TERM_CMD_LEN - 1);
-                matches++;
-            }
-        }
-        if (matches == 1) {
-            kstrcpy(sh->input, last);
-            if (vfs_dir_count(last) >= 0) kstrcat(sh->input, "/");
-            sh->input_len = (int)kstrlen(sh->input);
-            sh->cursor = sh->input_len;
-        }
+        sh_complete(sh);
         return;
     }
     if (key == 0x1B) { sh->input[0] = 0; sh->input_len = 0; sh->cursor = 0; return; }
@@ -1081,14 +1554,14 @@ static void shell_mouse(void *state, int event, int x, int y, int button, int wh
     shell_t *sh = (shell_t *)state;
     (void)x; (void)y; (void)button;
     if (event == APP_EV_WHEEL) {
-        sh->scroll = k_clamp(sh->scroll + wheel * 3, 0, k_max(0, sh->nlines));
+        sh->scroll = k_clamp(sh->scroll + wheel * 3, 0, k_max(0, sh->nlines - 1));
     } else if (event == APP_EV_MOUSE_DOWN) {
         sh->scroll = 0;
     }
 }
 
 const app_desc_t app_shell = {
-    "sh", "AetherShell", "terminal", ICON_TERMINAL,
+    "sh", "Crommand", "terminal", ICON_TERMINAL,
     760, 460, 380, 220, APP_CAT_SYSTEM, 1, 0,
     shell_create, shell_destroy, shell_paint, shell_key, shell_mouse, shell_tick, NULL
 };

@@ -8,6 +8,11 @@ static int g_panic_active;
 static u32 g_panic_ms;
 static char g_panic_reason[128];
 static u32 g_panic_eip, g_panic_pid;
+/* Timestamp of the previous frame, used to derive the frame delta.  Hoisted
+   out of the loop body when the frame was split into aether_frame(). */
+static u64 g_last_frame;
+/* Negative hal_init() result if the machine failed to start (0 on success). */
+static int g_aether_boot_error;
 
 
 /* -------------------------------------------------------------------------- */
@@ -67,8 +72,8 @@ static void boot_render(u32 elapsed_ms) {
                          RGBA(90, 190, 255, 120));
             }
         }
-        gfx_text_center(cx, cy + r + 18, "AetherOS", RGB(226, 240, 255), 2);
-        gfx_text_center(cx, cy + r + 44, AETHER_VERSION_STR "  \"" AETHER_CODENAME "\"  --  single-executable operating system",
+        gfx_text_center(cx, cy + r + 18, "AE", RGB(226, 240, 255), 2);
+        gfx_text_center(cx, cy + r + 44, AE_VERSION_STR "  \"" AE_CODENAME "\"  --  single-executable operating system",
                         RGB(120, 150, 180), 0);
     }
 
@@ -123,14 +128,14 @@ static void panic_render(u32 elapsed) {
     gfx_reset_clip();
     gfx_fill_rect(0, 0, SCREEN_W, SCREEN_H, RGB(0, 0, 168));
     gfx_fill_rect(0, 0, SCREEN_W, 22, RGB(0, 0, 168));
-    gfx_text_term(40, 40, "*** AetherOS KERNEL PANIC ***", RGB(255, 255, 255), 0, 0);
+    gfx_text_term(40, 40, "*** AE KERNEL PANIC ***", RGB(255, 255, 255), 0, 0);
     y = 72;
     ksnprintf(buf, sizeof(buf), "reason: %s", g_panic_reason);
     gfx_text_term(40, y, buf, RGB(255, 255, 255), 0, 0); y += 24;
     ksnprintf(buf, sizeof(buf), "EIP=0x%08X  PID=%u (%s)  kernel %s", (unsigned)g_panic_eip,
               (unsigned)g_panic_pid,
               proc_pcb(g_panic_pid) ? proc_pcb(g_panic_pid)->name : "kernel",
-              AETHER_VERSION_STR);
+              AE_VERSION_STR);
     gfx_text_term(40, y, buf, RGB(255, 255, 255), 0, 0); y += 32;
 
     gfx_text_term(40, y, "CPU registers:", RGB(200, 200, 255), 0, 0); y += 20;
@@ -211,11 +216,21 @@ static void panic_render(u32 elapsed) {
 
 static u32 g_frame_no;
 
+/* Publish only what the compositor regenerated this frame.  The WM keeps the
+   damaged rect in g_damage (in 80_wm.c); the boot and panic screens repaint the
+   whole screen, so they ask for a full present instead. */
+void hal_present(int x, int y, int w, int h);
+
 static void present_dirty_region(void) {
-    static int last_x0, last_y0, last_x1, last_y1, have_last;
+    wm_rect_t d = wm_last_damage();
+    if (d.w <= 0 || d.h <= 0) { hal_frame_boundary(++g_frame_no); return; }
+    hal_present(d.x, d.y, d.w, d.h);
+    hal_frame_boundary(++g_frame_no);
+}
+
+static void present_full(void) {
     hal_present(0, 0, SCREEN_W, SCREEN_H);
     hal_frame_boundary(++g_frame_no);
-    (void)last_x0; (void)last_y0; (void)last_x1; (void)last_y1; (void)have_last;
 }
 
 static void handle_global_hotkeys(int key, int ch, int mods) {
@@ -233,17 +248,27 @@ static void handle_global_hotkeys(int key, int ch, int mods) {
     }
 }
 
-int aether_main(int argc, char **argv) {
-    u64 last_frame;
-    u32 frame_dt = 16;
-
+/* Boot the kernel once: HAL, physical memory, VFS, scheduler, compositor.
+   Returns 0 on success.  This is split out of aether_main so a host that cannot
+   block -- the wasm shell drives the machine from requestAnimationFrame -- can
+   boot first and then step the machine one frame at a time. */
+int aether_boot(int argc, char **argv) {
+    int rc;
     (void)argc; (void)argv;
     kmemset(&g_machine, 0, sizeof(g_machine));
-    if (hal_init() != 0) {
+    rc = hal_init();
+    if (rc != 0) {
+        /* Keep the code so the shell can report *which* step failed instead of
+           exiting silently -- the exact gap that made the Win32 build look
+           like it did nothing at all. */
+        g_aether_boot_error = rc;
+#ifdef AETHER_WASM
+        js_log("hal_init failed");
+#endif
         return 1;
     }
     klog_clear();
-    klog("AetherOS %s (%s) booting on the %s chassis", AETHER_VERSION_STR, AETHER_CODENAME,
+    klog("AE %s (%s) booting on the %s chassis", AE_VERSION_STR, AE_CODENAME,
          g_machine.host_os);
     klog("hal: physical RAM 0x00000000-0x%08X reserved as one contiguous block",
          (unsigned)PHYS_RAM_SIZE);
@@ -263,163 +288,225 @@ int aether_main(int argc, char **argv) {
 
     g_boot_start_ms = now_ms();
     g_boot_stage = 1;
-    last_frame = now_us();
+    g_last_frame = now_us();
+    return 0;
+}
 
-    /* open the terminal once boot completes */
-    {
-        const app_desc_t *d = app_by_id("sh");
-        (void)d;
+/* --------------------------------------------------------------------------
+ *  One frame of the machine
+ *
+ *  Everything the old `while (hal_running())` loop did for a single iteration
+ *  lives here, so that either entry style can drive it:
+ *
+ *    - aether_main() calls it in a loop and then hal_sleep_ms(), which is what
+ *      the Win32 and headless chassis want (a blocking sleep is fine there);
+ *    - the wasm shell calls aether_frame() straight from requestAnimationFrame
+ *      and never sleeps, because a wasm module cannot block its host.
+ *
+ *  Returns 1 while the machine is still running, 0 once it has shut down.
+ * ------------------------------------------------------------------------ */
+static int g_reboot_pending;
+
+/* The compositor tracks its own damage; the HAL needs to know whether the
+   pointer sprite is currently part of the framebuffer so it can be lifted
+   before the next partial repaint.  Declared here rather than in the prelude
+   because it is inside the WM. */
+void wm_cursor_presented(void);
+
+int aether_frame(void) {
+    hal_event_t ev;
+    u64 now;
+    u32 dt;
+    u32 frame_dt = 16;
+
+    /* A reboot request arrives from inside a callback (the shell's `reboot`
+       command, or the panic handler), i.e. with the requesting application
+       still on the C stack.  Tearing the window table down right there freed
+       the very shell state that was about to paint itself, which crashed the
+       kernel on the next frame.  The teardown is therefore deferred to the top
+       of the following frame, when no callback is running. */
+    if (g_reboot_pending) {
+        g_reboot_pending = 0;
+        klog("kernel: reboot requested, restarting the kernel subsystems");
+        gfx_clear(RGB(0, 0, 0));
+        present_full();
+        wm_shutdown();
+        proc_init();
+        cc_init();
+        irq_init();
+        /* Deliberately no mm_release_owner(0): pid 0 is the kernel, and releasing
+           it frees *every* block in the heap, including globals that outlive the
+           reboot (fonts, icon caches, the framebuffer shadow).  The next window
+           opened after a reboot then painted through a dangling pointer and the
+           kernel faulted.  Windows are released properly by wm_shutdown(). */
+        wm_init();
+        proc_boot_daemons();
+        g_boot_start_ms = now_ms() + 400;
+        g_boot_stage = 1;
     }
 
-    while (hal_running()) {
-        hal_event_t ev;
-        u64 now;
-        u32 dt;
+    while (hal_poll_event(&ev)) {
+        if (ev.type == HAL_EV_QUIT) { hal_request_quit(); break; }
+        irq_host_event(&ev);
+    }
+    irq_timer_poll();
+    now = now_us();
+    /* g_last_frame persists between calls: a local would be reset on entry and
+       every frame would see the whole uptime as its delta (clamped to 100 ms),
+       which makes animations and the scheduler run at a fixed wrong speed. */
+    dt = (u32)((now - g_last_frame) / 1000);
+    if (dt > 100) dt = 100;
+    g_last_frame = now;
+    frame_dt = dt;
 
-        while (hal_poll_event(&ev)) {
-            if (ev.type == HAL_EV_QUIT) { hal_request_quit(); break; }
-            irq_host_event(&ev);
-        }
-        irq_timer_poll();
-        now = now_us();
-        dt = (u32)((now - last_frame) / 1000);
-        if (dt > 100) dt = 100;
-        last_frame = now;
-        frame_dt = dt;
-
-        /* drain keyboard/mouse hardware queues into the desktop */
-        {
-            kbd_event_t ke;
-            while (irq_keyboard_pop(&ke)) {
-                if (!ke.pressed) continue;
-                if (g_boot_stage == 1) {
-                    if (ke.scancode == 0x39 || ke.scancode == 0x1C) {
-                        g_boot_start_ms = now_ms() - 3000;
-                    }
-                    continue;
+    /* drain keyboard/mouse hardware queues into the desktop */
+    {
+        kbd_event_t ke;
+        while (irq_keyboard_pop(&ke)) {
+            if (!ke.pressed) continue;
+            if (g_boot_stage == 1) {
+                if (ke.scancode == 0x39 || ke.scancode == 0x1C) {
+                    g_boot_start_ms = now_ms() - 3000;
                 }
-                if (g_panic_active) {
-                    if (ke.ascii == 'r' || ke.ascii == 'R') {
-                        g_panic_active = 0;
-                        wm_state()->reboot_requested = 1;
-                    } else if (ke.scancode == 0x01) {
-                        g_panic_active = 0;
-                    } else if (ke.ascii == 'd' || ke.ascii == 'D') {
-                        klog("PANIC: state dumped to /var/log/panic.log");
-                        vfs_write_string("/var/log/panic.log", klog_data(NULL));
-                    }
-                    continue;
+                continue;
+            }
+            if (g_panic_active) {
+                if (ke.ascii == 'r' || ke.ascii == 'R') {
+                    g_panic_active = 0;
+                    wm_state()->reboot_requested = 1;
+                } else if (ke.scancode == 0x01) {
+                    g_panic_active = 0;
+                } else if (ke.ascii == 'd' || ke.ascii == 'D') {
+                    klog("PANIC: state dumped to /var/log/panic.log");
+                    vfs_write_string("/var/log/panic.log", klog_data(NULL));
                 }
-                {
-                    /* map scancodes back to host virtual keys for the apps */
-                    static const struct { u8 sc; int vk; } map[] = {
-                        {0x1C, 0x0D}, {0x0E, 0x08}, {0x0F, 0x09}, {0x01, 0x1B},
-                        {0x48, 0x26}, {0x50, 0x28}, {0x4B, 0x25}, {0x4D, 0x27},
-                        {0x47, 0x24}, {0x4F, 0x23}, {0x49, 0x21}, {0x51, 0x22},
-                        {0x53, 0x2E}, {0x52, 0x2D}, {0x3B, 0x70}, {0x3C, 0x71},
-                        {0x3D, 0x72}, {0x3E, 0x73}, {0x3F, 0x74}, {0x40, 0x75}
-                    };
-                    int vk = 0;
-                    int mi;
-                    int special = 0;
-                    /* Scancode 0 means the host handed us a translated glyph:
-                       the character itself is the key code.  Otherwise the
-                       scancode decides, and only known special keys map to a
-                       virtual-key code.  Getting this backwards makes plain
-                       letters look like function keys ('s' == 0x73 == F4). */
-                    /* Glyph-only events carry NO virtual-key code: ASCII
-                       collides with VK codes ('.' is 0x2E, i.e. VK_DELETE, and
-                       '-' is 0x2D, i.e. VK_INSERT), which used to make typing
-                       those characters act as cursor keys.  Apps read the
-                       character from `ch` and only special keys get a code. */
-                    if (ke.scancode == 0) vk = 0;
-                    for (mi = 0; mi < (int)(sizeof(map) / sizeof(map[0])); mi++)
-                        if (ke.scancode == map[mi].sc) { vk = map[mi].vk; special = 1; break; }
-                    if (special) handle_global_hotkeys(vk, 0, ke.mods);
-                    wm_on_key(vk, ke.ascii, ke.mods);
-                }
+                continue;
             }
             {
-                mouse_event_t me;
-                while (irq_mouse_pop(&me)) {
-                    int buttons = me.buttons;
-                    if (g_boot_stage != 1 && !g_panic_active) {
-                        /* Order matters: the button transition is detected from
-                           the previous state, and the move handler must not be
-                           allowed to clear it before wm_on_mouse_down/up run. */
-                        int was_down = g_wm.mouse_down;
-                        g_wm.mouse_px = me.x;
-                        g_wm.mouse_py = me.y;
-                        if (me.dz) wm_on_wheel(me.x, me.y, me.dz);
-                        if ((buttons & 1) && !was_down) {
-                            wm_on_mouse_down(me.x, me.y, 1);
-                            wm_on_mouse_move(me.x, me.y, buttons);
-                        } else if (!(buttons & 1) && was_down) {
-                            wm_on_mouse_up(me.x, me.y, 1);
-                            wm_on_mouse_move(me.x, me.y, buttons);
-                        } else {
-                            wm_on_mouse_move(me.x, me.y, buttons);
-                        }
+                /* map scancodes back to host virtual keys for the apps */
+                static const struct { u8 sc; int vk; } map[] = {
+                    {0x1C, 0x0D}, {0x0E, 0x08}, {0x0F, 0x09}, {0x01, 0x1B},
+                    {0x48, 0x26}, {0x50, 0x28}, {0x4B, 0x25}, {0x4D, 0x27},
+                    {0x47, 0x24}, {0x4F, 0x23}, {0x49, 0x21}, {0x51, 0x22},
+                    {0x53, 0x2E}, {0x52, 0x2D}, {0x3B, 0x70}, {0x3C, 0x71},
+                    {0x3D, 0x72}, {0x3E, 0x73}, {0x3F, 0x74}, {0x40, 0x75}
+                };
+                int vk = 0;
+                int mi;
+                int special = 0;
+                /* Scancode 0 means the host handed us a translated glyph:
+                   the character itself is the key code.  Otherwise the
+                   scancode decides, and only known special keys map to a
+                   virtual-key code.  Getting this backwards makes plain
+                   letters look like function keys ('s' == 0x73 == F4). */
+                /* Glyph-only events carry NO virtual-key code: ASCII
+                   collides with VK codes ('.' is 0x2E, i.e. VK_DELETE, and
+                   '-' is 0x2D, i.e. VK_INSERT), which used to make typing
+                   those characters act as cursor keys.  Apps read the
+                   character from `ch` and only special keys get a code. */
+                if (ke.scancode == 0) vk = 0;
+                for (mi = 0; mi < (int)(sizeof(map) / sizeof(map[0])); mi++)
+                    if (ke.scancode == map[mi].sc) { vk = map[mi].vk; special = 1; break; }
+                if (special) handle_global_hotkeys(vk, 0, ke.mods);
+                wm_on_key(vk, ke.ascii, ke.mods);
+            }
+        }
+        {
+            mouse_event_t me;
+            while (irq_mouse_pop(&me)) {
+                int buttons = me.buttons;
+                if (g_boot_stage != 1 && !g_panic_active) {
+                    /* Order matters: the button transition is detected from
+                       the previous state, and the move handler must not be
+                       allowed to clear it before wm_on_mouse_down/up run. */
+                    int was_down = g_wm.mouse_down;
+                    int was_right = g_wm.mouse_right_down;
+                    g_wm.mouse_px = me.x;
+                    g_wm.mouse_py = me.y;
+                    if (me.dz) wm_on_wheel(me.x, me.y, me.dz);
+                    /* Each button is tracked independently: pressing the right
+                       button while the left is held must not look like a drag,
+                       and releasing one must not release the other. */
+                    if ((buttons & 2) && !was_right) {
+                        wm_on_mouse_down(me.x, me.y, 2);
+                        wm_on_mouse_move(me.x, me.y, buttons);
+                    } else if (!(buttons & 2) && was_right) {
+                        wm_on_mouse_up(me.x, me.y, 2);
+                        wm_on_mouse_move(me.x, me.y, buttons);
+                    } else if ((buttons & 1) && !was_down) {
+                        wm_on_mouse_down(me.x, me.y, 1);
+                        wm_on_mouse_move(me.x, me.y, buttons);
+                    } else if (!(buttons & 1) && was_down) {
+                        wm_on_mouse_up(me.x, me.y, 1);
+                        wm_on_mouse_move(me.x, me.y, buttons);
+                    } else {
+                        wm_on_mouse_move(me.x, me.y, buttons);
                     }
                 }
             }
         }
-
-        /* boot phase */
-        if (g_boot_stage == 1) {
-            u32 elapsed = now_ms() - g_boot_start_ms;
-            boot_render(elapsed);
-            present_dirty_region();
-            if (elapsed > 2650) {
-                g_boot_stage = 2;
-                {
-                    const app_desc_t *d = app_by_id("sh");
-                    if (d) wm_open_app(d, NULL);
-                }
-                notify_ex("Welcome to AetherOS -- right-click a desktop icon", 1);
-            }
-            hal_sleep_ms(8);
-            continue;
-        }
-
-        /* panic phase */
-        if (g_panic_active) {
-            panic_render(now_ms() - g_panic_ms);
-            present_dirty_region();
-            hal_sleep_ms(16);
-            continue;
-        }
-
-        /* main desktop */
-        proc_tick();
-        cc_step_all(600);
-        wm_update(frame_dt);
-        wm_render();
-        present_dirty_region();
-
-        if (wm_take_quit()) { hal_request_quit(); }
-        if (wm_take_reboot()) {
-            klog("kernel: reboot requested, restarting the kernel subsystems");
-            gfx_clear(RGB(0, 0, 0));
-            present_dirty_region();
-            proc_init();
-            cc_init();
-            irq_init();
-            mm_release_owner(0);
-            wm_init();
-            proc_boot_daemons();
-            g_boot_start_ms = now_ms() + 400;
-            g_boot_stage = 1;
-        }
-        if (wm_take_crash()) {
-            kernel_panic("kernel panic triggered from the Start menu", 0x0001F4A0, proc_running_pid());
-        }
-        hal_sleep_ms(1);
     }
 
+    /* boot phase */
+    if (g_boot_stage == 1) {
+        u32 elapsed = now_ms() - g_boot_start_ms;
+        boot_render(elapsed);
+        present_full();
+        if (elapsed > 2650) {
+            g_boot_stage = 2;
+            {
+                const app_desc_t *d = app_by_id("sh");
+                if (d) wm_open_app(d, NULL);
+            }
+            notify_ex("Welcome to AE -- right-click a desktop icon", 1);
+        }
+        return hal_running();
+    }
+
+    /* panic phase */
+    if (g_panic_active) {
+        panic_render(now_ms() - g_panic_ms);
+        present_full();
+        return hal_running();
+    }
+
+    /* main desktop */
+    proc_tick();
+    cc_step_all(600);
+    wm_update(frame_dt);
+    wm_render();
+    present_dirty_region();
+
+    if (wm_take_quit()) { hal_request_quit(); }
+    /* Deferred: see the top of aether_frame(). */
+    if (wm_take_reboot()) g_reboot_pending = 1;
+    if (wm_take_crash()) {
+        kernel_panic("kernel panic triggered from the Start menu", 0x0001F4A0, proc_running_pid());
+    }
+    return hal_running();
+}
+
+/* --------------------------------------------------------------------------
+ *  Blocking entry point (Win32 + headless)
+ *
+ *  Identical behaviour to the original loop: one frame, then a short host
+ *  sleep to pace the machine.  Only the wasm shell takes the non-blocking
+ *  route through aether_boot()/aether_frame().
+ * ------------------------------------------------------------------------ */
+#ifndef AETHER_WASM
+int aether_main(int argc, char **argv) {
+    int rc = aether_boot(argc, argv);
+    if (rc != 0) return rc;
+    while (aether_frame()) {
+        /* Pace the frame: the boot and panic screens are cheaper than the full
+           desktop, but a fixed 1 ms yield is what the original loop used for the
+           steady state.  8 ms during boot keeps the animation smooth. */
+        hal_sleep_ms(g_boot_stage == 1 ? 8 : 1);
+    }
     hal_shutdown();
     return 0;
 }
+#endif
 
 #ifdef AETHER_HEADLESS
 int main(int argc, char **argv) {
@@ -427,7 +514,7 @@ int main(int argc, char **argv) {
        variables and always exits through hal_request_quit(). */
     return aether_main(argc, argv);
 }
-#else
+#elif !defined(AETHER_WASM)
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR lpCmd, int nShow) {
     (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
     return aether_main(0, NULL);
@@ -447,4 +534,50 @@ int WINAPI aether_entry(void) {
     ExitProcess((UINT)rc);
     return rc;
 }
+#endif
+
+/* --------------------------------------------------------------------------
+ *  WebAssembly entry points
+ *
+ *  The Electron shell loads the module, calls aether_wasm_boot() once, then
+ *  calls aether_wasm_frame() from requestAnimationFrame.  Neither function
+ *  blocks, so the host's UI thread keeps painting and stays responsive.
+ * ------------------------------------------------------------------------ */
+#ifdef AETHER_WASM
+__attribute__((export_name("aether_boot")))
+int aether_wasm_boot(void) {
+    return aether_boot(0, NULL);
+}
+
+__attribute__((export_name("aether_frame")))
+int aether_wasm_frame(void) {
+    return aether_frame();
+}
+
+__attribute__((export_name("aether_running")))
+int aether_wasm_running(void) {
+    return hal_running();
+}
+
+__attribute__((export_name("aether_shutdown")))
+void aether_wasm_shutdown(void) {
+    hal_shutdown();
+}
+
+/* The framebuffer lives inside the module's linear memory.  The shell reads
+   these two so it never has to hard-code the geometry of the emulated VGA. */
+__attribute__((export_name("aether_vram")))
+u32 *aether_wasm_vram(void) { return hal_vram(); }
+
+__attribute__((export_name("aether_screen_w")))
+int aether_wasm_w(void) { return SCREEN_W; }
+
+__attribute__((export_name("aether_screen_h")))
+int aether_wasm_h(void) { return SCREEN_H; }
+
+/* Exit code of the last failed hal_init(), so a shell can say *why* the machine
+   refused to boot instead of failing silently. */
+__attribute__((export_name("aether_last_error")))
+int aether_wasm_error(void) { return g_aether_boot_error; }
+
 #endif

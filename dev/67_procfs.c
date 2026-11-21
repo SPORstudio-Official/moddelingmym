@@ -103,10 +103,10 @@ static char *proc_uptime(void) {
 static char *proc_version(void) {
     char buf[400];
     ksnprintf(buf, sizeof(buf),
-        "AetherOS version %s (%s) #1 SMP PREEMPT Thu Nov 20 09:41:00 UTC 2026\n"
+        "AE version %s (%s) #1 SMP PREEMPT Thu Nov 20 09:41:00 UTC 2026\n"
         "compiler: %s\n"
         "build: monolithic hybrid microkernel, 32-bit\n",
-        AETHER_VERSION_STR, AETHER_CODENAME,
+        AE_VERSION_STR, AE_CODENAME,
 #ifdef __VERSION__
         __VERSION__
 #else

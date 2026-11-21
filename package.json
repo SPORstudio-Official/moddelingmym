@@ -1,0 +1,62 @@
+{
+  "name": "aetheros",
+  "version": "1.0.0",
+  "description": "AE -- a complete 32-bit operating system that boots inside a single desktop window",
+  "main": "electron/main.js",
+  "private": true,
+  "author": "SPORstudio",
+  "license": "MIT",
+  "scripts": {
+    "build:wasm": "bash tools/build_wasm.sh",
+    "build:single": "node tools/bundle_standalone.js",
+    "build": "npm run build:wasm && npm run build:single",
+    "app": "bash tools/make_app.sh",
+    "exe": "bash tools/build_exe.sh",
+    "start": "npm run build && electron .",
+    "start:only": "electron .",
+    "web": "node tools/serve.js",
+    "test": "node tools/host_test.js && node tools/browser_test.js && node tools/customise_test.js && node tools/bundle_test.js && node tools/exe_test.js && node tools/page_test.js",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "fetch-electron": "node node_modules/electron/install.js"
+  },
+  "devDependencies": {
+    "electron": "^32.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "studio.spor.aetheros",
+    "productName": "AE",
+    "files": [
+      "electron/**/*",
+      "app/index.html",
+      "app/style.css",
+      "app/boot.js",
+      "app/aether-host.js",
+      "app/aether.wasm"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "AE"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
+  }
+}

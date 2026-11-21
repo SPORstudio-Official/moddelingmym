@@ -189,7 +189,12 @@ static char translate_scancode(u8 sc, u8 mods) {
     return c;
 }
 
-void irq_keyboard_push(u8 scancode, int pressed, char ascii_override) {
+/* ascii_override: 0 = derive the glyph from the scancode and modifiers,
+   IRQ_GLYPH_NONE = this transition carries no glyph at all, anything else = the
+   glyph the host already resolved. */
+#define IRQ_GLYPH_NONE (-1)
+
+void irq_keyboard_push(u8 scancode, int pressed, int ascii_override) {
     kbd_event_t *e;
     u32 next;
     if (g_irq.irq_mask & (1 << IRQ_KEYBOARD)) return;
@@ -216,8 +221,9 @@ void irq_keyboard_push(u8 scancode, int pressed, char ascii_override) {
     e->scancode = scancode;
     e->pressed = (u8)(pressed ? 1 : 0);
     e->mods = g_irq.kbd_mods;
-    e->ascii = (u8)(ascii_override ? ascii_override
-                                   : (pressed ? translate_scancode(scancode, g_irq.kbd_mods) : 0));
+    if (ascii_override == IRQ_GLYPH_NONE) e->ascii = 0;
+    else if (ascii_override) e->ascii = (u8)ascii_override;
+    else e->ascii = (u8)(pressed ? translate_scancode(scancode, g_irq.kbd_mods) : 0);
     e->tick = g_irq.ticks;
     g_irq.kbd_head = next;
     g_irq.kbd_events++;
@@ -301,11 +307,50 @@ u8 irq_buttons_from_host(int host) {
     return b;
 }
 
+/* Did the key event immediately before this one already deliver `ch`?
+ *
+ * The host emits KEYDOWN(vk) followed by CHAR(ch) for the same physical press.
+ * Most keys need that split -- the vk drives shortcuts, the ch drives text --
+ * but for the four control characters below, both halves map to the same
+ * scancode and the desktop acts on each, so the line ran twice.  The rule is
+ * deliberately narrow: only a key event seen since the previous drain counts,
+ * so genuine repeats of a printable character are unaffected.
+ */
+static int g_last_key_vk;
+static int g_last_key_seen;
+
+static int irq_glyph_already_delivered(int ch) {
+    int vk = 0;
+    switch (ch) {
+    case 13: vk = 0x0D; break;
+    case 8:  vk = 0x08; break;
+    case 9:  vk = 0x09; break;
+    default: return 0;
+    }
+    if (g_last_key_seen && g_last_key_vk == vk) {
+        g_last_key_seen = 0;      /* consume it: one press, one delivery */
+        return 1;
+    }
+    return 0;
+}
+
 void irq_host_event(const hal_event_t *ev) {
     switch (ev->type) {
     case HAL_EV_KEYDOWN: {
         u8 sc = host_vk_to_scancode(ev->key);
-        if (sc) irq_keyboard_push(sc, 1, 0);
+        g_last_key_vk = ev->key;
+        g_last_key_seen = 1;
+        /* Deliver the transition only: no glyph.
+           A GUI host resolves the character itself (Shift, CapsLock, dead keys,
+           keyboard layout) and sends it as a separate HAL_EV_CHAR right after
+           this event, exactly like Win32's WM_CHAR following WM_KEYDOWN.  If
+           this call also derived a glyph from the scancode, every keystroke
+           produced two characters -- "abc" typed as "aabbcc".  Electron relies
+           on this; the Win32 chassis still derives its glyph from WM_CHAR, and
+           the headless chassis sends only HAL_EV_CHAR, so neither is affected.
+           Apps distinguish the two by `ch`: text arrives with ch != 0, while a
+           shortcut arrives carrying only the key code. */
+        if (sc) irq_keyboard_push(sc, 1, IRQ_GLYPH_NONE);
         break;
     }
     case HAL_EV_KEYUP: {
@@ -314,6 +359,16 @@ void irq_host_event(const hal_event_t *ev) {
         break;
     }
     case HAL_EV_CHAR: {
+        /* An ASCII printable repeats the scancode the KEYDOWN for the same key
+           already delivered?  No -- the host sends KEYDOWN with no glyph and
+           CHAR with no key, so exactly one transition reaches the desktop for
+           a printable character.  The control keys below are different: Enter
+           arrives as KEYDOWN(vk 0x0D) *and* CHAR(13), and both map to scancode
+           0x1C, so the shell saw "\r" from the first and "\n" from the second
+           and executed the line twice.  Suppressing the glyph when a key event
+           for the same character was just delivered fixes the double-execute
+           without dropping the character itself. */
+        if (irq_glyph_already_delivered(ev->ch)) break;
         if (ev->ch >= 32 && ev->ch < 127) {
             /* the host already applied modifiers; deliver the final glyph */
             irq_keyboard_push(0x00, 1, (char)ev->ch);
@@ -323,6 +378,16 @@ void irq_host_event(const hal_event_t *ev) {
             irq_keyboard_push(0x0E, 1, '\b');
         } else if (ev->ch == 9) {
             irq_keyboard_push(0x0F, 1, '\t');
+        } else if (ev->ch > 0 && ev->ch < 32) {
+            /* Every other control character.  Ctrl+C reaches a host as the
+               character 0x03, not as the letter "c" carrying a modifier flag,
+               so dropping control codes entirely meant Ctrl+letter could not
+               work anywhere in the system: no copy/paste in the file manager,
+               no Ctrl+C or Ctrl+L in the shell.  Delivered as a glyph with no
+               scancode, so the app sees exactly the byte that was pressed.
+               It has to come after Enter/Backspace/Tab above, which need their
+               real scancodes. */
+            irq_keyboard_push(0x00, 1, ev->ch);
         }
         break;
     }

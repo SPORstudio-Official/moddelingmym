@@ -16,3 +16,8 @@ aether_os.c
 .zig/
 .venv/
 __pycache__/
+
+# Electron / Node
+node_modules/
+app/aether.wasm
+dist-app/

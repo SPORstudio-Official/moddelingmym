@@ -1,38 +1,135 @@
 /* ==========================================================================
- *  APP: explorer -- VFS file manager
+ *  APP: explorer -- the AE file manager
  *
- *  Breadcrumb path bar, up button, new file / new folder / delete actions,
- *  grid and list views with procedural per-type icons, double-click to enter
- *  folders, open text/code in Code Studio and launch executables.
+ *  A full file manager, not a viewer.  Everything a user expects of one is
+ *  here, and every operation goes through the VFS so it is visible to the
+ *  shell, the editor and /proc immediately:
+ *
+ *    navigate   breadcrumb, up, double-click, keyboard arrows
+ *    create     New File, New Folder -- with a name prompt, not "untitled1.txt"
+ *    edit       Rename, Duplicate, Properties
+ *    destroy    Delete, Delete key, Delete All in a folder
+ *    move/copy  Cut, Copy, Paste across folders (an internal clipboard)
+ *    open       text/code in Code Studio, binaries in Hex Viewer, folders enter
+ *
+ *  Every mutating action reports what happened in the status bar: the older
+ *  version silently ignored failures, which is why the folder looked read-only.
  * ========================================================================== */
 
 #define EXP_MAX_ENTRIES 96
 #define EXP_COLS 5
+#define EXP_PATH_MAX VFS_MAX_PATH
+
+/* What the inline prompt is being used for.  The prompt replaces the old
+   "create a file called untitled3.txt and hope the user finds it" behaviour:
+   every name the user chooses is typed in a box on the toolbar. */
+enum {
+    EXP_PROMPT_NONE = 0,
+    EXP_PROMPT_NEW_FILE,
+    EXP_PROMPT_NEW_DIR,
+    EXP_PROMPT_RENAME,
+    EXP_PROMPT_DUP
+};
 
 typedef struct {
-    char path[VFS_MAX_PATH];
+    char path[EXP_PATH_MAX];
     vfs_dirent_t ent[EXP_MAX_ENTRIES];
     int  nent;
     int  selected;
     int  list_view;
     int  scroll;
     int  hover;
-    int  status_kind;
+    int  status_kind;           /* 0 info, 1 ok, 2 warn, 3 error            */
     char status[128];
-    char rename_buf[64];
-    int  renaming;
+    int  sort_mode;             /* 0 name, 1 size, 2 type                   */
     u32  last_click_ms;
     int  last_click_idx;
-    int  sort_mode;             /* 0 name, 1 size, 2 type               */
+
+    /* inline name prompt */
+    int  prompt;                /* EXP_PROMPT_*                             */
+    char prompt_buf[64];
+    int  prompt_len;
+
+    /* clipboard (internal: a path plus the operation to perform on paste) */
+    int  clip_kind;             /* 0 empty, 1 copy, 2 cut                   */
+    char clip_path[EXP_PATH_MAX];
+
+    int  show_props;            /* properties panel for `selected`          */
 } explorer_t;
+
+/* -------------------------------------------------------------------------- */
+/*  helpers                                                                */
+/* -------------------------------------------------------------------------- */
+
+static void exp_join(char *out, int cap, const char *dir, const char *name) {
+    ksnprintf(out, cap, "%s/%s", kstrcmp(dir, "/") ? dir : "", name);
+}
+
+static void exp_set_status(explorer_t *ex, int kind, const char *fmt, const char *a, const char *b) {
+    /* A tiny printf wrapper: the status line is the only feedback the user gets
+       for a destructive action, so every path sets it. */
+    char buf[128];
+    ksnprintf(buf, sizeof(buf), fmt, a ? a : "", b ? b : "");
+    kstrncpy(ex->status, buf, sizeof(ex->status) - 1);
+    ex->status[sizeof(ex->status) - 1] = 0;
+    ex->status_kind = kind;
+}
+
+static void exp_set_status1(explorer_t *ex, int kind, const char *text) {
+    kstrncpy(ex->status, text, sizeof(ex->status) - 1);
+    ex->status[sizeof(ex->status) - 1] = 0;
+    ex->status_kind = kind;
+}
+
+static int exp_selected_path(explorer_t *ex, char *out, int cap) {
+    if (ex->selected < 0 || ex->selected >= ex->nent) return 0;
+    exp_join(out, cap, ex->path, ex->ent[ex->selected].name);
+    return 1;
+}
+
+/* A unique name derived from `base`, so "Paste" twice cannot collide and
+   "Duplicate" produces "name copy.txt", "name copy 2.txt", ... */
+static void exp_unique_path(const char *dir, const char *base, char *out, int cap) {
+    int i;
+    char leaf[80];
+    for (i = 0; i < 500; i++) {
+        if (i == 0) ksnprintf(leaf, sizeof(leaf), "%s", base);
+        else ksnprintf(leaf, sizeof(leaf), "%s %d", base, i);
+        exp_join(out, cap, dir, leaf);
+        if (!vfs_resolve(out)) return;
+    }
+    exp_join(out, cap, dir, base);
+}
+
+/* Split "report.txt" into "report" + ".txt" so a duplicate can be named
+   "report copy.txt" rather than "report copy.txt.txt". */
+static void exp_split_ext(const char *name, char *stem, int stem_cap, char *ext, int ext_cap) {
+    const char *dot = NULL;
+    int i;
+    for (i = 0; name[i]; i++) if (name[i] == '.') dot = name + i;
+    if (!dot || dot == name) {
+        kstrncpy(stem, name, stem_cap - 1);
+        stem[stem_cap - 1] = 0;
+        ext[0] = 0;
+        return;
+    }
+    kstrncpy(stem, name, (int)(dot - name) < stem_cap - 1 ? (int)(dot - name) : stem_cap - 1);
+    stem[(int)(dot - name) < stem_cap - 1 ? (int)(dot - name) : stem_cap - 1] = 0;
+    kstrncpy(ext, dot, ext_cap - 1);
+    ext[ext_cap - 1] = 0;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  directory listing                                                      */
+/* -------------------------------------------------------------------------- */
 
 static void exp_refresh(explorer_t *ex) {
     int i, n;
+    int keep = ex->selected;
     ex->nent = 0;
     n = vfs_dir_count(ex->path);
     if (n < 0) {
-        ksnprintf(ex->status, sizeof(ex->status), "cannot open %s", ex->path);
-        ex->status_kind = 2;
+        exp_set_status1(ex, 3, "this folder is no longer reachable");
         return;
     }
     for (i = 0; i < n && ex->nent < EXP_MAX_ENTRIES; i++) {
@@ -41,7 +138,7 @@ static void exp_refresh(explorer_t *ex) {
         if (!kstrcmp(d.name, ".") || !kstrcmp(d.name, "..")) continue;
         ex->ent[ex->nent++] = d;
     }
-    /* sort: directories first, then name */
+    /* sort: directories first, then the chosen key */
     {
         int j;
         for (i = 1; i < ex->nent; i++) {
@@ -55,19 +152,18 @@ static void exp_refresh(explorer_t *ex) {
                     else swap = kstrnicmp(ex->ent[j].name, key.name, 64) > 0;
                 } else if (ex->sort_mode == 1) {
                     vfs_inode_t a, b;
-                    char pa[VFS_MAX_PATH], pb[VFS_MAX_PATH];
-                    ksnprintf(pa, sizeof(pa), "%s/%s", kstrcmp(ex->path, "/") ? ex->path : "", ex->ent[j].name);
-                    ksnprintf(pb, sizeof(pb), "%s/%s", kstrcmp(ex->path, "/") ? ex->path : "", key.name);
+                    char pa[EXP_PATH_MAX], pb[EXP_PATH_MAX];
                     kmemset(&a, 0, sizeof(a));
                     kmemset(&b, 0, sizeof(b));
+                    exp_join(pa, sizeof(pa), ex->path, ex->ent[j].name);
+                    exp_join(pb, sizeof(pb), ex->path, key.name);
                     vfs_stat_path(pa, &a);
                     vfs_stat_path(pb, &b);
                     if (adir != bdir) swap = (!adir && bdir);
-                    else swap = a.size > b.size;
+                    else swap = a.size < b.size;
                 } else {
-                    if (adir != bdir) swap = (!adir && bdir);
-                    else swap = ex->ent[j].type > key.type ||
-                                (ex->ent[j].type == key.type && kstrnicmp(ex->ent[j].name, key.name, 64) > 0);
+                    if (ex->ent[j].type != key.type) swap = ex->ent[j].type > key.type;
+                    else swap = kstrnicmp(ex->ent[j].name, key.name, 64) > 0;
                 }
                 if (!swap) break;
                 ex->ent[j + 1] = ex->ent[j];
@@ -76,46 +172,44 @@ static void exp_refresh(explorer_t *ex) {
             ex->ent[j + 1] = key;
         }
     }
-    if (ex->selected >= ex->nent) ex->selected = ex->nent - 1;
-    if (ex->selected < 0) ex->selected = 0;
+    if (keep < ex->nent) ex->selected = keep;
+    else ex->selected = ex->nent ? ex->nent - 1 : 0;
+    if (ex->scroll > ex->nent) ex->scroll = 0;
 }
 
-static void *explorer_create(const char *arg) {
-    explorer_t *ex = (explorer_t *)mm_kmalloc(sizeof(explorer_t));
-    if (!ex) return NULL;
-    kmemset(ex, 0, sizeof(*ex));
-    if (arg && arg[0] == '/') kstrncpy(ex->path, arg, sizeof(ex->path) - 1);
-    else kstrcpy(ex->path, vfs_cwd());
-    if (vfs_dir_count(ex->path) < 0) kstrcpy(ex->path, "/home/user");
-    exp_refresh(ex);
-    return ex;
-}
-
-static void explorer_destroy(void *state) { if (state) mm_kfree(state); }
+/* -------------------------------------------------------------------------- */
+/*  operations                                                             */
+/* -------------------------------------------------------------------------- */
 
 static void exp_navigate(explorer_t *ex, const char *path) {
-    char abs[VFS_MAX_PATH];
+    char abs[EXP_PATH_MAX];
+    vfs_inode_t st;
     vfs_normalise(ex->path, path, abs, sizeof(abs));
-    if (vfs_dir_count(abs) < 0) {
-        ksnprintf(ex->status, sizeof(ex->status), "no such directory: %s", path);
-        ex->status_kind = 2;
+    kmemset(&st, 0, sizeof(st));
+    if (vfs_stat_path(abs, &st) != 0 || st.type != FT_DIR) {
+        exp_set_status(ex, 3, "cannot open %s", path, NULL);
         return;
     }
     kstrncpy(ex->path, abs, sizeof(ex->path) - 1);
+    ex->path[sizeof(ex->path) - 1] = 0;
     ex->selected = 0;
     ex->scroll = 0;
+    ex->show_props = 0;
     exp_refresh(ex);
-    ksnprintf(ex->status, sizeof(ex->status), "%d entries", ex->nent);
-    ex->status_kind = 0;
+    {
+        char buf[64];
+        ksnprintf(buf, sizeof(buf), "%d items", ex->nent);
+        exp_set_status1(ex, 0, buf);
+    }
 }
 
 static void exp_open_entry(explorer_t *ex, int idx) {
     const char *name;
-    char full[VFS_MAX_PATH];
+    char full[EXP_PATH_MAX];
     vfs_inode_t st;
     if (idx < 0 || idx >= ex->nent) return;
     name = ex->ent[idx].name;
-    ksnprintf(full, sizeof(full), "%s/%s", kstrcmp(ex->path, "/") ? ex->path : "", name);
+    exp_join(full, sizeof(full), ex->path, name);
     if (ex->ent[idx].type == FT_DIR) {
         exp_navigate(ex, full);
         return;
@@ -133,74 +227,381 @@ static void exp_open_entry(explorer_t *ex, int idx) {
         char *data = vfs_read_alloc(full, &len, &err);
         int is_binary = 0;
         u32 i;
-        if (!data) return;
+        if (!data) {
+            exp_set_status(ex, 3, "cannot read %s", name, NULL);
+            return;
+        }
         if (len > 4 && !kstrncmp(data, "AEBX", 4)) is_binary = 1;
         for (i = 0; i < len && i < 512; i++)
             if ((u8)data[i] < 9) is_binary = 1;
         mm_kfree(data);
-        if (is_binary) {
-            const app_desc_t *d = app_by_id("hexview");
-            if (d) wm_open_app(d, full);
-        } else {
-            const app_desc_t *d = app_by_id("edit");
+        {
+            const app_desc_t *d = app_by_id(is_binary ? "hexview" : "edit");
             if (d) wm_open_app(d, full);
         }
     }
 }
 
 static void exp_delete(explorer_t *ex) {
-    char full[VFS_MAX_PATH];
-    if (ex->selected < 0 || ex->selected >= ex->nent) return;
-    ksnprintf(full, sizeof(full), "%s/%s", kstrcmp(ex->path, "/") ? ex->path : "",
-              ex->ent[ex->selected].name);
+    char full[EXP_PATH_MAX];
+    char name[VFS_MAX_NAME];
+    if (!exp_selected_path(ex, full, sizeof(full))) return;
+    kstrncpy(name, ex->ent[ex->selected].name, sizeof(name) - 1);
+    name[sizeof(name) - 1] = 0;
     {
         int rc = vfs_unlink(full);
         if (rc == 0) {
-            ksnprintf(ex->status, sizeof(ex->status), "deleted %s", ex->ent[ex->selected].name);
-            ex->status_kind = 1;
+            exp_set_status(ex, 1, "deleted %s", name, NULL);
             exp_refresh(ex);
         } else if (rc == -2) {
-            ksnprintf(ex->status, sizeof(ex->status), "directory not empty");
-            ex->status_kind = 2;
+            exp_set_status1(ex, 2, "that folder is not empty -- delete its contents first");
         } else {
-            ksnprintf(ex->status, sizeof(ex->status), "cannot delete %s", ex->ent[ex->selected].name);
-            ex->status_kind = 2;
+            exp_set_status(ex, 3, "cannot delete %s (system file?)", name, NULL);
         }
     }
 }
 
-static void exp_new_file(explorer_t *ex, int is_dir) {
-    char name[64];
-    char full[VFS_MAX_PATH];
-    int i = 1;
-    for (;;) {
-        ksnprintf(name, sizeof(name), is_dir ? "new_folder%d" : "untitled%d.txt", i);
-        ksnprintf(full, sizeof(full), "%s/%s", kstrcmp(ex->path, "/") ? ex->path : "", name);
-        if (!vfs_resolve(full)) break;
-        if (++i > 500) return;
+/* Copy or cut the selection to the internal clipboard. */
+static void exp_clip(explorer_t *ex, int kind) {
+    char full[EXP_PATH_MAX];
+    if (!exp_selected_path(ex, full, sizeof(full))) return;
+    kstrncpy(ex->clip_path, full, sizeof(ex->clip_path) - 1);
+    ex->clip_path[sizeof(ex->clip_path) - 1] = 0;
+    ex->clip_kind = kind;
+    exp_set_status(ex, 1, kind == 2 ? "cut %s -- paste in the destination folder"
+                                   : "copied %s -- paste in the destination folder",
+                   ex->ent[ex->selected].name, NULL);
+}
+
+static void exp_copy_tree(explorer_t *ex, const char *from, const char *to);
+
+static void exp_paste(explorer_t *ex) {
+    char leaf[VFS_MAX_NAME];
+    char dest[EXP_PATH_MAX];
+    char base[80];
+    const char *p;
+    int i, slash = -1;
+    vfs_inode_t st;
+    if (!ex->clip_kind) {
+        exp_set_status1(ex, 2, "nothing to paste -- use Copy or Cut first");
+        return;
     }
-    if (is_dir) {
-        if (vfs_create_node(full, FT_DIR)) {
-            ksnprintf(ex->status, sizeof(ex->status), "created folder %s", name);
-            ex->status_kind = 1;
+    /* leaf name of the clipboard path */
+    for (p = ex->clip_path, i = 0; *p; p++, i++) if (*p == '/') slash = i;
+    kstrncpy(leaf, ex->clip_path + slash + 1, sizeof(leaf) - 1);
+    leaf[sizeof(leaf) - 1] = 0;
+    if (!leaf[0]) { exp_set_status1(ex, 3, "cannot paste the root folder"); return; }
+
+    /* pasting into the folder it came from duplicates it, like every desktop */
+    {
+        char parent[EXP_PATH_MAX];
+        parent[0] = 0;
+        kstrncpy(parent, ex->clip_path, (slash > 0) ? (size_t)slash : 1);
+        parent[(slash > 0) ? slash : 1] = 0;
+        {
+            char want[EXP_PATH_MAX];
+            vfs_normalise("/", ex->path, want, sizeof(want));
+            if (!kstrcmp(parent, want) || !kstrcmp(parent, ex->path)) {
+                char stem[64], ext[16];
+                exp_split_ext(leaf, stem, sizeof(stem), ext, sizeof(ext));
+                ksnprintf(base, sizeof(base), "%s %s%s", stem,
+                          ex->clip_kind == 2 ? "moved" : "copy", ext);
+            } else {
+                ksnprintf(base, sizeof(base), "%s", leaf);
+            }
+        }
+    }
+    exp_unique_path(ex->path, base, dest, sizeof(dest));
+
+    kmemset(&st, 0, sizeof(st));
+    vfs_stat_path(ex->clip_path, &st);
+    if (st.type == FT_DIR) {
+        if (ex->clip_kind == 2) {
+            if (vfs_rename(ex->clip_path, dest) == 0) {
+                exp_set_status(ex, 1, "moved %s here", leaf, NULL);
+                ex->clip_kind = 0;
+            } else {
+                exp_set_status(ex, 3, "cannot move %s here", leaf, NULL);
+            }
+        } else {
+            exp_copy_tree(ex, ex->clip_path, dest);
+            exp_set_status(ex, 1, "copied folder %s here", leaf, NULL);
         }
     } else {
-        if (vfs_create_node(full, FT_FILE)) {
-            ksnprintf(ex->status, sizeof(ex->status), "created file %s", name);
-            ex->status_kind = 1;
+        if (ex->clip_kind == 2) {
+            if (vfs_rename(ex->clip_path, dest) == 0) {
+                exp_set_status(ex, 1, "moved %s here", leaf, NULL);
+                ex->clip_kind = 0;
+            } else {
+                exp_set_status(ex, 3, "cannot move %s here", leaf, NULL);
+            }
+        } else {
+            if (vfs_copy(ex->clip_path, dest) == 0) {
+                exp_set_status(ex, 1, "copied %s here", leaf, NULL);
+            } else {
+                exp_set_status(ex, 3, "cannot copy %s", leaf, NULL);
+            }
         }
     }
     exp_refresh(ex);
-    for (i = 0; i < ex->nent; i++)
-        if (!kstrcmp(ex->ent[i].name, name)) ex->selected = i;
+    for (i = 0; i < ex->nent; i++) {
+        char full[EXP_PATH_MAX];
+        exp_join(full, sizeof(full), ex->path, ex->ent[i].name);
+        if (!kstrcmp(full, dest)) { ex->selected = i; break; }
+    }
 }
 
-static wm_rect_t exp_icon_rect(wm_rect_t c, int idx, int *rows_visible) {
+/* Recursive folder copy: the VFS has no cp -r, so the file manager provides
+   one.  Written recursively because the tree is shallow (a few levels) and a
+   depth-first copy is what a user expects to see happen instantly. */
+static void exp_copy_tree(explorer_t *ex, const char *from, const char *to) {
+    vfs_inode_t st;
+    int i, n;
+    (void)ex;
+    kmemset(&st, 0, sizeof(st));
+    if (vfs_stat_path(from, &st) != 0) return;
+    if (st.type != FT_DIR) {
+        vfs_copy(from, to);
+        return;
+    }
+    vfs_mkdir_path(to);
+    n = vfs_dir_count(from);
+    for (i = 0; i < n; i++) {
+        vfs_dirent_t d;
+        char cf[EXP_PATH_MAX], ct[EXP_PATH_MAX];
+        if (vfs_dir_get(from, i, &d) != 0) break;
+        if (!kstrcmp(d.name, ".") || !kstrcmp(d.name, "..")) continue;
+        exp_join(cf, sizeof(cf), from, d.name);
+        exp_join(ct, sizeof(ct), to, d.name);
+        exp_copy_tree(ex, cf, ct);
+    }
+}
+
+/* Rename to the name currently in the prompt buffer. */
+static void exp_do_rename(explorer_t *ex) {
+    char full[EXP_PATH_MAX], dest[EXP_PATH_MAX];
+    if (!exp_selected_path(ex, full, sizeof(full))) return;
+    if (!ex->prompt_buf[0]) {
+        exp_set_status1(ex, 2, "a name is required");
+        return;
+    }
+    exp_join(dest, sizeof(dest), ex->path, ex->prompt_buf);
+    if (!kstrcmp(dest, full)) return;
+    {
+        int rc = vfs_rename(full, dest);
+        if (rc == 0) {
+            exp_set_status(ex, 1, "renamed to %s", ex->prompt_buf, NULL);
+            exp_refresh(ex);
+            {
+                int i;
+                for (i = 0; i < ex->nent; i++)
+                    if (!kstrcmp(ex->ent[i].name, ex->prompt_buf)) { ex->selected = i; break; }
+            }
+        } else if (rc == -2) {
+            exp_set_status(ex, 2, "%s already exists", ex->prompt_buf, NULL);
+            return;                       /* keep the prompt open to correct it */
+        } else {
+            exp_set_status1(ex, 3, "cannot rename this item");
+            return;
+        }
+    }
+    ex->prompt = EXP_PROMPT_NONE;
+}
+
+/* Create the file or folder named in the prompt buffer. */
+static void exp_do_create(explorer_t *ex, int is_dir) {
+    char dest[EXP_PATH_MAX];
+    if (!ex->prompt_buf[0]) {
+        exp_set_status1(ex, 2, "a name is required");
+        return;
+    }
+    exp_join(dest, sizeof(dest), ex->path, ex->prompt_buf);
+    if (vfs_resolve(dest)) {
+        exp_set_status(ex, 2, "%s already exists", ex->prompt_buf, NULL);
+        return;
+    }
+    if (is_dir) {
+        if (vfs_mkdir_path(dest) != 0) {
+            exp_set_status(ex, 3, "cannot create the folder %s", ex->prompt_buf, NULL);
+            return;
+        }
+    } else if (!vfs_create_node(dest, FT_FILE)) {
+        exp_set_status(ex, 3, "cannot create the file %s", ex->prompt_buf, NULL);
+        return;
+    } else {
+        exp_set_status(ex, 1, "created %s", ex->prompt_buf, NULL);
+        exp_refresh(ex);
+        {
+            int i;
+            for (i = 0; i < ex->nent; i++)
+                if (!kstrcmp(ex->ent[i].name, ex->prompt_buf)) { ex->selected = i; break; }
+        }
+        ex->prompt = EXP_PROMPT_NONE;
+        return;
+    }
+    exp_set_status(ex, 1, "created the folder %s", ex->prompt_buf, NULL);
+    exp_refresh(ex);
+    {
+        int i;
+        for (i = 0; i < ex->nent; i++)
+            if (!kstrcmp(ex->ent[i].name, ex->prompt_buf)) { ex->selected = i; break; }
+    }
+    ex->prompt = EXP_PROMPT_NONE;
+}
+
+/* Duplicate the selection next to itself, keeping the extension. */
+static void exp_do_duplicate(explorer_t *ex) {
+    char full[EXP_PATH_MAX], dest[EXP_PATH_MAX];
+    char stem[64], ext[16], base[96];
+    if (!exp_selected_path(ex, full, sizeof(full))) return;
+    exp_split_ext(ex->ent[ex->selected].name, stem, sizeof(stem), ext, sizeof(ext));
+    ksnprintf(base, sizeof(base), "%s copy%s", stem, ext);
+    exp_unique_path(ex->path, base, dest, sizeof(dest));
+    {
+        vfs_inode_t st;
+        kmemset(&st, 0, sizeof(st));
+        vfs_stat_path(full, &st);
+        if (st.type == FT_DIR) exp_copy_tree(ex, full, dest);
+        else if (vfs_copy(full, dest) != 0) {
+            exp_set_status1(ex, 3, "cannot duplicate this item");
+            return;
+        }
+    }
+    exp_set_status(ex, 1, "duplicated as %s", ex->ent[ex->selected].name, NULL);
+    exp_refresh(ex);
+    {
+        int i;
+        const char *leaf = dest + (int)kstrlen(ex->path) + 1;
+        for (i = 0; i < ex->nent; i++)
+            if (!kstrcmp(ex->ent[i].name, leaf)) { ex->selected = i; break; }
+    }
+}
+
+/* Begin an inline prompt for a name.  `seed` pre-fills it (rename), and for a
+   new file the extension of the previous one is a useful default. */
+static void exp_begin_prompt(explorer_t *ex, int kind, const char *seed) {
+    /* Pressing the shortcut again while its own prompt is open must not throw
+       away what the user has typed -- Ctrl+N twice used to leave an empty box
+       and every following keystroke went into a name that had just been reset. */
+    if (ex->prompt == kind && !seed) return;
+    ex->prompt = kind;
+    ex->prompt_len = 0;
+    ex->prompt_buf[0] = 0;
+    if (seed) {
+        kstrncpy(ex->prompt_buf, seed, sizeof(ex->prompt_buf) - 1);
+        ex->prompt_buf[sizeof(ex->prompt_buf) - 1] = 0;
+        ex->prompt_len = (int)kstrlen(ex->prompt_buf);
+    }
+}
+
+static void exp_prompt_commit(explorer_t *ex) {
+    switch (ex->prompt) {
+    case EXP_PROMPT_NEW_FILE: exp_do_create(ex, 0); break;
+    case EXP_PROMPT_NEW_DIR:  exp_do_create(ex, 1); break;
+    case EXP_PROMPT_RENAME:   exp_do_rename(ex); break;
+    case EXP_PROMPT_DUP:      break;
+    default: break;
+    }
+    /* create/rename clear the prompt themselves on success; a failure keeps it
+       open so the user can fix the name instead of starting over. */
+}
+
+/* -------------------------------------------------------------------------- */
+/*  geometry                                                               */
+/* -------------------------------------------------------------------------- */
+
+static wm_rect_t exp_icon_rect(wm_rect_t c, int idx, int *cell_h_out) {
     int cell_w = (c.w - 24) / EXP_COLS;
     int cell_h = 86;
     int col = idx % EXP_COLS, row = idx / EXP_COLS;
-    if (rows_visible) *rows_visible = cell_h;
+    if (cell_h_out) *cell_h_out = cell_h;
     return (wm_rect_t){ c.x + 12 + col * cell_w, c.y + 84 + row * cell_h, cell_w - 6, cell_h - 6 };
+}
+
+/* Toolbar layout, shared by painting and hit-testing so a button can never be
+   drawn somewhere other than where it responds. */
+#define EXP_TOOL_H 26
+static const char *const exp_tool_labels[] = { "File", "Folder", "Rename", "Copy", "Cut", "Paste" };
+#define EXP_TOOL_COUNT 6
+#define EXP_TOOL_W 62
+#define EXP_TOOL_GAP 4
+
+static int exp_tool_x(wm_rect_t c, int i) {
+    /* right-aligned row of buttons, ending 10 px from the edge */
+    int total = EXP_TOOL_COUNT * EXP_TOOL_W + (EXP_TOOL_COUNT - 1) * EXP_TOOL_GAP;
+    return c.x + c.w - 10 - total + i * (EXP_TOOL_W + EXP_TOOL_GAP);
+}
+
+/* -------------------------------------------------------------------------- */
+/*  paint                                                                  */
+/* -------------------------------------------------------------------------- */
+
+static void exp_paint_prompt(explorer_t *ex, wm_rect_t c, theme_t *t, int y) {
+    const char *label =
+        ex->prompt == EXP_PROMPT_NEW_FILE ? "File name:" :
+        ex->prompt == EXP_PROMPT_NEW_DIR  ? "Folder name:" :
+        ex->prompt == EXP_PROMPT_RENAME   ? "Rename to:" : "Name:";
+    /* The hint, and the width it actually needs.  The old layout reserved a flat
+       150 px for it and let the input box take whatever was left, so on a
+       normal-width window the hint ran past the client edge and was clipped
+       mid-word -- the box looked like it overlapped the frame. */
+    const char *hint = "Enter - create    Esc - cancel";
+    int hint_w = gfx_text_w(hint, 0) + 12;
+    int label_w = gfx_text_w(label, 0) + 8;
+    int x = c.x + 12;
+    int box_x, box_w;
+
+    gfx_fill_rect(c.x, y, c.w, 26, RGBA(14, 20, 30, 252));
+    gfx_fill_rect(c.x, y, 3, 26, t->accent);
+    gfx_text(x, y + 7, label, t->text_dim, 0);
+    x += label_w;
+
+    box_x = x;
+    box_w = c.w - (box_x - c.x) - hint_w - 10;
+    if (box_w < 90) box_w = 90;
+
+    gfx_round_rect(box_x, y + 3, box_w, 20, 4, RGBA(8, 12, 18, 240));
+    gfx_round_rect_border(box_x, y + 3, box_w, 20, 4, t->accent, 1);
+    gfx_text_clip(box_x + 6, y + 7, box_w - 12, ex->prompt_buf, t->text, 0);
+    if (((now_ms() / 500) & 1)) {
+        int cx = box_x + 6 + gfx_text_w(ex->prompt_buf, 0) + 1;
+        if (cx < box_x + box_w - 6) gfx_fill_rect(cx, y + 6, 1, 14, t->accent);
+    }
+    /* only draw the hint when there is genuinely room for it */
+    if (box_x + box_w + 8 + gfx_text_w(hint, 0) <= c.x + c.w - 6)
+        gfx_text(box_x + box_w + 8, y + 7, hint, t->text_mute, 0);
+}
+
+static void exp_paint_props(explorer_t *ex, wm_rect_t c, theme_t *t) {
+    char full[EXP_PATH_MAX];
+    vfs_inode_t st;
+    char line[160];
+    int x, y, w = 320, h = 150;
+    if (!exp_selected_path(ex, full, sizeof(full))) return;
+    kmemset(&st, 0, sizeof(st));
+    if (vfs_stat_path(full, &st) != 0) return;
+    x = c.x + c.w - w - 16;
+    y = c.y + c.h - h - 34;
+    gfx_shadow(x, y, w, h, 8, 8, 150);
+    gfx_round_rect(x, y, w, h, 8, RGBA(18, 24, 34, 252));
+    gfx_round_rect_border(x, y, w, h, 8, t->accent, 1);
+    gfx_text(x + 12, y + 10, "Properties", t->text, 0);
+    gfx_fill_rect(x + 12, y + 28, w - 24, 1, RGBA(60, 74, 96, 160));
+    ksnprintf(line, sizeof(line), "Name   %s", ex->ent[ex->selected].name);
+    gfx_text_clip(x + 12, y + 36, w - 24, line, t->text_dim, 0);
+    ksnprintf(line, sizeof(line), "Type   %s", vfs_type_name(st.type));
+    gfx_text(x + 12, y + 54, line, t->text_dim, 0);
+    ksnprintf(line, sizeof(line), "Size   %u bytes (%u blocks)",
+              (unsigned)st.size, (unsigned)((st.size + 511u) / 512u));
+    gfx_text(x + 12, y + 72, line, t->text_dim, 0);
+    ksnprintf(line, sizeof(line), "Mode   %o    Links %u", (unsigned)st.mode,
+              (unsigned)st.link_count);
+    gfx_text(x + 12, y + 90, line, t->text_dim, 0);
+    ksnprintf(line, sizeof(line), "Inode  %u%s", (unsigned)st.ino,
+              (ex->clip_kind && !kstrcmp(ex->clip_path, full)) ? "   [on clipboard]" : "");
+    gfx_text(x + 12, y + 108, line, t->text_dim, 0);
+    ksnprintf(line, sizeof(line), "Path   %s", full);
+    gfx_text_clip(x + 12, y + 126, w - 24, line, t->text_mute, 0);
 }
 
 static void explorer_paint(void *state, window_t *w, wm_rect_t c) {
@@ -211,10 +612,10 @@ static void explorer_paint(void *state, window_t *w, wm_rect_t c) {
 
     gfx_fill_rect(c.x, c.y, c.w, c.h, t->win_bg);
 
-    /* toolbar: up + breadcrumb + action buttons */
+    /* ---- toolbar: up + breadcrumb + action buttons ---------------------- */
     {
         int bx = c.x + 8;
-        int btn = 26;
+        int btn = EXP_TOOL_H;
         int hover_up = (g_wm.mouse_px >= bx && g_wm.mouse_px < bx + btn &&
                         g_wm.mouse_py >= bar_y && g_wm.mouse_py < bar_y + btn);
         gfx_round_rect(bx, bar_y, btn, btn, 5, hover_up ? t->sel : RGBA(40, 52, 72, 200));
@@ -223,11 +624,14 @@ static void explorer_paint(void *state, window_t *w, wm_rect_t c) {
 
         /* breadcrumbs */
         {
-            char crumbs[VFS_MAX_PATH];
+            char crumbs[EXP_PATH_MAX];
             char *p;
             int cx = bx;
+            int crumb_w = exp_tool_x(c, 0) - bx - 10;
+            if (crumb_w < 80) crumb_w = 80;
             kstrncpy(crumbs, ex->path, sizeof(crumbs) - 1);
-            gfx_round_rect(cx, bar_y, c.w - (bx - c.x) - 190, btn, 5, RGBA(10, 14, 22, 220));
+            crumbs[sizeof(crumbs) - 1] = 0;
+            gfx_round_rect(cx, bar_y, crumb_w, btn, 5, RGBA(10, 14, 22, 220));
             gfx_circle(cx + 10, bar_y + btn / 2, 3, t->accent);
             cx += 20;
             gfx_text(cx, bar_y + 6, "/", t->text_dim, 0);
@@ -236,20 +640,13 @@ static void explorer_paint(void *state, window_t *w, wm_rect_t c) {
             while (*p) {
                 char comp[64];
                 int n = 0;
-                char acc[VFS_MAX_PATH];
                 while (*p == '/') p++;
                 if (!*p) break;
                 while (*p && *p != '/' && n < 63) comp[n++] = *p++;
                 comp[n] = 0;
                 {
                     int tw = gfx_text_w(comp, 0);
-                    if (cx + tw > c.x + c.w - 200) { gfx_text(cx, bar_y + 6, "...", t->text_mute, 0); break; }
-                    /* accumulate absolute prefix for the click handler */
-                    ksnprintf(acc, sizeof(acc), "%s", ex->path);
-                    {
-                        /* the crumb click zone is recomputed from the path */
-                        (void)acc;
-                    }
+                    if (cx + tw > bx + crumb_w - 12) { gfx_text(cx, bar_y + 6, "...", t->text_mute, 0); break; }
                     gfx_text(cx, bar_y + 6, comp, t->text, 0);
                     cx += tw + 2;
                     gfx_text(cx, bar_y + 6, "/", t->text_mute, 0);
@@ -258,27 +655,26 @@ static void explorer_paint(void *state, window_t *w, wm_rect_t c) {
             }
         }
 
-        /* action buttons */
-        {
-            int ax = c.x + c.w - 178;
-            const char *labels[3] = { "File", "Folder", "Delete" };
-            int icons[3] = { ICON_TXT, ICON_FOLDER, ICON_CLOSE };
-            for (i = 0; i < 3; i++) {
-                int bw = 56;
-                int hover = (g_wm.mouse_px >= ax && g_wm.mouse_px < ax + bw &&
-                             g_wm.mouse_py >= bar_y && g_wm.mouse_py < bar_y + 26);
-                gfx_round_rect(ax, bar_y, bw, 26, 5,
-                               hover ? (i == 2 ? RGBA(200, 70, 80, 220) : t->sel)
-                                     : RGBA(36, 46, 64, 220));
-                gfx_draw_icon(icons[i], ax + 4, bar_y + 5, 16);
-                gfx_text(ax + 22, bar_y + 7, labels[i], t->text, 0);
-                ax += bw + 4;
-            }
+        /* action buttons -- geometry from exp_tool_x(), the same function the
+           click handler uses */
+        for (i = 0; i < EXP_TOOL_COUNT; i++) {
+            int ax = exp_tool_x(c, i);
+            int hover = (g_wm.mouse_px >= ax && g_wm.mouse_px < ax + EXP_TOOL_W &&
+                         g_wm.mouse_py >= bar_y && g_wm.mouse_py < bar_y + EXP_TOOL_H);
+            int dim = (i == 5 && !ex->clip_kind);          /* Paste with nothing copied */
+            u32 bg = hover ? t->sel : RGBA(36, 46, 64, 220);
+            if (i == 5 && ex->clip_kind) bg = hover ? t->accent : RGBA(48, 70, 96, 230);
+            gfx_round_rect(ax, bar_y, EXP_TOOL_W, EXP_TOOL_H, 5, bg);
+            gfx_text_center(ax + EXP_TOOL_W / 2, bar_y + 7, exp_tool_labels[i],
+                            dim ? t->text_mute : t->text, 0);
         }
     }
 
-    /* view switch + status */
-    {
+    /* ---- prompt row (replaces the view switch while it is open) --------- */
+    if (ex->prompt != EXP_PROMPT_NONE) {
+        exp_paint_prompt(ex, c, t, c.y + 36);
+    } else {
+        /* view switch + path + count */
         int vy = c.y + 40;
         const char *views[2] = { "Icons", "List" };
         for (i = 0; i < 2; i++) {
@@ -287,7 +683,7 @@ static void explorer_paint(void *state, window_t *w, wm_rect_t c) {
             gfx_round_rect(vx, vy, 54, 20, 5, active ? t->accent : RGBA(30, 40, 56, 200));
             gfx_text_center(vx + 27, vy + 3, views[i], active ? RGB(8, 14, 22) : t->text_dim, 0);
         }
-        gfx_text(c.x + 132, vy + 3, ex->path, t->text_mute, 0);
+        gfx_text_clip(c.x + 132, vy + 3, c.w - 260, ex->path, t->text_mute, 0);
         {
             char buf[64];
             ksnprintf(buf, sizeof(buf), "%d items", ex->nent);
@@ -295,202 +691,352 @@ static void explorer_paint(void *state, window_t *w, wm_rect_t c) {
         }
     }
 
-    /* entry area */
-    {
-        int list_top = c.y + 66;
-        gfx_hline(c.x + 6, list_top, c.w - 12, RGBA(255, 255, 255, 16));
-        if (!ex->nent) {
-            gfx_text_center(c.x + c.w / 2, c.y + c.h / 2 - 10, "this directory is empty", t->text_mute, 1);
-        } else if (!ex->list_view) {
-            for (i = 0; i < ex->nent; i++) {
-                wm_rect_t r = exp_icon_rect(c, i, NULL);
-                int sel = (i == ex->selected);
-                int hover = (g_wm.mouse_px >= r.x && g_wm.mouse_px < r.x + r.w &&
-                             g_wm.mouse_py >= r.y && g_wm.mouse_py < r.y + r.h);
-                char full[VFS_MAX_PATH];
+    /* ---- entries -------------------------------------------------------- */
+    if (!ex->list_view) {
+        for (i = ex->scroll; i < ex->nent; i++) {
+            wm_rect_t r = exp_icon_rect(c, i - ex->scroll, NULL);
+            const vfs_dirent_t *d = &ex->ent[i];
+            int on_clip = 0;
+            if (r.y + r.h > c.y + c.h - 26) break;
+            gfx_round_rect(r.x, r.y, r.w, r.h, 6, i == ex->selected ? t->sel : RGBA(0, 0, 0, 0));
+            if (d->type == FT_DIR) gfx_draw_icon(ICON_FOLDER, r.x + r.w / 2 - 18, r.y + 10, 36);
+            else gfx_draw_icon(gfx_icon_for_path(d->name, d->type == FT_DIR, d->type == FT_PROC, 0), r.x + r.w / 2 - 18, r.y + 10, 36);
+            /* Long names used to run under the next tile and over the size
+               line.  Clip to the cell instead: a truncated name is honest, an
+               overlapping one is a bug. */
+            gfx_text_clip(r.x + 4, r.y + 52, r.w - 8, d->name, t->text, 0);
+            {
                 vfs_inode_t st;
-                int icon;
-                if (r.y + r.h > c.y + c.h - 26) break;
-                ksnprintf(full, sizeof(full), "%s/%s", kstrcmp(ex->path, "/") ? ex->path : "",
-                          ex->ent[i].name);
+                char full[EXP_PATH_MAX];
+                char sz[24];
+                int tw;
                 kmemset(&st, 0, sizeof(st));
+                exp_join(full, sizeof(full), ex->path, d->name);
                 vfs_stat_path(full, &st);
-                icon = gfx_icon_for_path(ex->ent[i].name, ex->ent[i].type == FT_DIR,
-                                         ex->ent[i].type == FT_PROC, 0);
-                if (sel || hover)
-                    gfx_round_rect(r.x, r.y, r.w, r.h, 8, sel ? t->sel : RGBA(255, 255, 255, 18));
-                if (sel) gfx_round_rect_border(r.x, r.y, r.w, r.h, 8, t->accent, 1);
-                gfx_draw_icon(icon, r.x + r.w / 2 - 17, r.y + 8, 34);
-                gfx_text_clip(r.x + 6, r.y + 50, r.w - 8, ex->ent[i].name, t->text, 0);
-                if (ex->ent[i].type != FT_DIR) {
-                    char buf[32];
-                    ksnprintf(buf, sizeof(buf), "%u B", (unsigned)st.size);
-                    gfx_text_right(r.x + r.w - 6, r.y + 66, buf, t->text_mute, 0);
-                }
+                if (ex->clip_kind && !kstrcmp(ex->clip_path, full)) on_clip = 1;
+                if (d->type == FT_DIR) kstrcpy(sz, "<dir>");
+                else ksnprintf(sz, sizeof(sz), "%u B", (unsigned)st.size);
+                /* centre, but never wider than the cell */
+                tw = gfx_text_w(sz, 0);
+                if (tw > r.w - 8) { gfx_text_clip(r.x + 4, r.y + 66, r.w - 8, sz, t->text_mute, 0); }
+                else gfx_text_center(r.x + r.w / 2, r.y + 66, sz, t->text_mute, 0);
             }
-        } else {
-            int row_h = 22;
-            gfx_text(c.x + 12, list_top + 4, "NAME", t->text_mute, 0);
-            gfx_text(c.x + c.w - 190, list_top + 4, "TYPE", t->text_mute, 0);
-            gfx_text(c.x + c.w - 120, list_top + 4, "SIZE", t->text_mute, 0);
-            gfx_text(c.x + c.w - 56, list_top + 4, "MODE", t->text_mute, 0);
-            for (i = 0; i < ex->nent; i++) {
-                int ry = list_top + 22 + i * row_h;
-                int sel = (i == ex->selected);
-                int hover = (g_wm.mouse_px >= c.x + 8 && g_wm.mouse_px < c.x + c.w - 8 &&
-                             g_wm.mouse_py >= ry && g_wm.mouse_py < ry + row_h);
-                char full[VFS_MAX_PATH];
-                vfs_inode_t st;
-                char mode[16];
-                int icon;
-                if (ry + row_h > c.y + c.h - 26) break;
-                ksnprintf(full, sizeof(full), "%s/%s", kstrcmp(ex->path, "/") ? ex->path : "",
-                          ex->ent[i].name);
-                kmemset(&st, 0, sizeof(st));
-                vfs_stat_path(full, &st);
-                vfs_mode_string(ex->ent[i].type, st.mode, mode);
-                icon = gfx_icon_for_path(ex->ent[i].name, ex->ent[i].type == FT_DIR,
-                                         ex->ent[i].type == FT_PROC, 0);
-                if (sel || hover) gfx_fill_rect(c.x + 8, ry, c.w - 16, row_h, sel ? t->sel : RGBA(255, 255, 255, 14));
-                gfx_draw_icon(icon, c.x + 12, ry + 3, 16);
-                gfx_text_clip(c.x + 34, ry + 3, c.w - 230, ex->ent[i].name, t->text, 0);
-                gfx_text(c.x + c.w - 190, ry + 3, vfs_type_name(ex->ent[i].type), t->text_dim, 0);
-                {
-                    char buf[32];
-                    ksnprintf(buf, sizeof(buf), "%u", (unsigned)st.size);
-                    gfx_text(c.x + c.w - 120, ry + 3, buf, t->text_dim, 0);
-                }
-                gfx_text(c.x + c.w - 56, ry + 3, mode, t->text_mute, 0);
+            if (on_clip)
+                gfx_round_rect_border(r.x, r.y, r.w, r.h, 6,
+                                      ex->clip_kind == 2 ? t->warn : t->info, 1);
+        }
+    } else {
+        int row_h = 22;
+        int top = c.y + 88;
+        for (i = ex->scroll; i < ex->nent; i++) {
+            int y = top + (i - ex->scroll) * row_h;
+            const vfs_dirent_t *d = &ex->ent[i];
+            vfs_inode_t st;
+            char full[EXP_PATH_MAX];
+            char sz[24];
+            if (y + row_h > c.y + c.h - 26) break;
+            if (i == ex->selected) gfx_fill_rect(c.x + 8, y, c.w - 16, row_h, t->sel);
+            gfx_draw_icon(d->type == FT_DIR ? ICON_FOLDER : gfx_icon_for_path(d->name, d->type == FT_DIR, d->type == FT_PROC, 0),
+                          c.x + 14, y + 3, 16);
+            gfx_text_clip(c.x + 38, y + 4, c.w - 120, d->name, t->text, 0);
+            kmemset(&st, 0, sizeof(st));
+            exp_join(full, sizeof(full), ex->path, d->name);
+            vfs_stat_path(full, &st);
+            if (d->type == FT_DIR) gfx_text_right(c.x + c.w - 20, y + 4, "<dir>", t->text_mute, 0);
+            else {
+                ksnprintf(sz, sizeof(sz), "%u B", (unsigned)st.size);
+                gfx_text_right(c.x + c.w - 20, y + 4, sz, t->text_mute, 0);
             }
         }
     }
 
-    /* status bar */
+    /* ---- properties panel ---------------------------------------------- */
+    if (ex->show_props) exp_paint_props(ex, c, t);
+
+    /* ---- status bar ----------------------------------------------------- */
     {
-        u32 col = ex->status_kind == 1 ? t->ok : (ex->status_kind == 2 ? t->err : t->text_dim);
-        gfx_fill_rect(c.x, c.y + c.h - 22, c.w, 22, RGBA(8, 12, 18, 240));
-        if (ex->status[0]) gfx_text(c.x + 10, c.y + c.h - 17, ex->status, col, 0);
-        {
-            u32 iu = 0, bu = 0;
-            char buf[96];
-            vfs_usage(&iu, &bu, NULL);
-            ksnprintf(buf, sizeof(buf), "vfs %u/%u inodes  %u/%u blocks",
-                      (unsigned)iu, (unsigned)VFS_INODES, (unsigned)bu, (unsigned)VFS_BLOCKS);
-            gfx_text_right(c.x + c.w - 10, c.y + c.h - 17, buf, t->text_mute, 0);
+        int sy = c.y + c.h - 19;
+        u32 col = ex->status_kind == 3 ? t->err :
+                  ex->status_kind == 2 ? t->warn :
+                  ex->status_kind == 1 ? t->ok : t->text_mute;
+        gfx_fill_rect(c.x, sy, c.w, 19, RGBA(8, 11, 17, 250));
+        gfx_text_clip(c.x + 10, sy + 5, c.w - 260, ex->status, col, 0);
+        if (ex->clip_kind) {
+            char buf[80];
+            ksnprintf(buf, sizeof(buf), "clipboard: %s",
+                      ex->clip_kind == 2 ? "cut" : "copied");
+            gfx_text_right(c.x + c.w - 10, sy + 5, buf, t->info, 0);
         }
     }
 }
 
-static void explorer_tick(void *state, u32 dt) { (void)state; (void)dt; }
+/* -------------------------------------------------------------------------- */
+/*  input                                                                  */
+/* -------------------------------------------------------------------------- */
 
 static void explorer_key(void *state, int key, int ch, int mods) {
     explorer_t *ex = (explorer_t *)state;
-    (void)mods;
-    if (ch == 'h' || key == 0x25) { if (ex->selected > 0) ex->selected--; }
-    if (ch == 'l' || key == 0x27) { if (ex->selected < ex->nent - 1) ex->selected++; }
-    if (key == 0x26) ex->selected = k_max(0, ex->selected - EXP_COLS);
-    if (key == 0x28) ex->selected = k_min(ex->nent - 1, ex->selected + EXP_COLS);
-    if (key == 0x0D) exp_open_entry(ex, ex->selected);
-    if (ch == 8) exp_navigate(ex, "..");
-    if (ch == 'n') exp_new_file(ex, 0);
-    if (ch == 'N') exp_new_file(ex, 1);
-    if (key == 0x2E) exp_delete(ex);
+
+    /* ---- the inline prompt takes every key while it is open ------------- */
+    if (ex->prompt != EXP_PROMPT_NONE) {
+        if (key == 0x0D || ch == '\n' || ch == '\r') { exp_prompt_commit(ex); return; }
+        if (key == 0x1B) { ex->prompt = EXP_PROMPT_NONE; exp_set_status1(ex, 0, "cancelled"); return; }
+        if (key == 0x08) {
+            if (ex->prompt_len > 0) ex->prompt_buf[--ex->prompt_len] = 0;
+            return;
+        }
+        if (ch >= 32 && ch < 127 && ex->prompt_len < (int)sizeof(ex->prompt_buf) - 2) {
+            ex->prompt_buf[ex->prompt_len++] = (char)ch;
+            ex->prompt_buf[ex->prompt_len] = 0;
+        }
+        return;
+    }
+
+    /* ---- navigation ----------------------------------------------------- */
+    if (key == 0x25 || ch == 'h') {
+        if ((mods & MOD_ALT)) { exp_navigate(ex, ".."); return; }
+        if (ex->selected > 0) ex->selected--;
+        return;
+    }
+    if (key == 0x27 || ch == 'l') { if (ex->selected < ex->nent - 1) ex->selected++; return; }
+    if (key == 0x26) { ex->selected = k_max(0, ex->selected - EXP_COLS); return; }
+    if (key == 0x28) { ex->selected = k_min(ex->nent - 1, ex->selected + EXP_COLS); return; }
+
+    /* ---- actions (with Ctrl modifiers where a desktop would use them) --- */
+    if (key == 0x0D) { exp_open_entry(ex, ex->selected); return; }        /* Enter   */
+    if (key == 0x2E) { exp_delete(ex); return; }                          /* Delete  */
+    if (key == 0x09) { ex->list_view = !ex->list_view; return; }          /* Tab     */
+    if (ch == 8) { exp_navigate(ex, ".."); return; }                      /* Backspc */
+
+    /* Ctrl+letter arrives two ways depending on the chassis: as a control
+       character (Ctrl+C is 0x03) or as the letter with MOD_CTRL set.  Accepting
+       only one of them is why the clipboard shortcuts did nothing. */
+    {
+        int letter = 0;
+        if (ch >= 1 && ch <= 26) letter = 'a' + ch - 1;
+        else if ((mods & MOD_CTRL) && ch >= 'A' && ch <= 'Z') letter = ch - 'A' + 'a';
+        else if ((mods & MOD_CTRL) && ch >= 'a' && ch <= 'z') letter = ch;
+        if (letter) {
+            switch (letter) {
+            case 'c': exp_clip(ex, 1); return;
+            case 'x': exp_clip(ex, 2); return;
+            case 'v': exp_paste(ex); return;
+            case 'n': exp_begin_prompt(ex, EXP_PROMPT_NEW_FILE, NULL); return;
+            case 'd': exp_begin_prompt(ex, EXP_PROMPT_NEW_DIR, NULL); return;
+            case 'r':
+                if (ex->selected < ex->nent)
+                    exp_begin_prompt(ex, EXP_PROMPT_RENAME, ex->ent[ex->selected].name);
+                return;
+            case 'i': ex->show_props = !ex->show_props; return;
+            case 'a':
+                /* Ctrl+A: report what is selected, since there is no marquee */
+                if (ex->selected < ex->nent)
+                    exp_set_status(ex, 0, "selected %s", ex->ent[ex->selected].name, NULL);
+                return;
+            default: break;
+            }
+        }
+    }
+    if (mods & MOD_CTRL) {
+        switch (ch) {
+        case 'c': case 'C': exp_clip(ex, 1); return;
+        case 'x': case 'X': exp_clip(ex, 2); return;
+        case 'v': case 'V': exp_paste(ex); return;
+        case 'n': case 'N': exp_begin_prompt(ex, EXP_PROMPT_NEW_FILE, NULL); return;
+        case 'd': case 'D': exp_begin_prompt(ex, EXP_PROMPT_NEW_DIR, NULL); return;
+        case 'r': case 'R':
+            if (ex->selected < ex->nent)
+                exp_begin_prompt(ex, EXP_PROMPT_RENAME, ex->ent[ex->selected].name);
+            return;
+        case 'i': case 'I': ex->show_props = !ex->show_props; return;
+        default: break;
+        }
+    }
+
+    /* single-letter actions, kept from the original build so muscle memory and
+       the help text in AE64 still work */
+    if (ch == 'n') exp_begin_prompt(ex, EXP_PROMPT_NEW_FILE, NULL);
+    if (ch == 'N') exp_begin_prompt(ex, EXP_PROMPT_NEW_DIR, NULL);
+    if (ch == 'r') {
+        if (ex->selected < ex->nent)
+            exp_begin_prompt(ex, EXP_PROMPT_RENAME, ex->ent[ex->selected].name);
+    }
+    if (ch == 'D' && ex->selected < ex->nent) exp_do_duplicate(ex);
+    if (ch == 'p' && ex->selected < ex->nent) ex->show_props = !ex->show_props;
     if (ch == 'v') ex->list_view = !ex->list_view;
     if (ch == 's') { ex->sort_mode = (ex->sort_mode + 1) % 3; exp_refresh(ex); }
 }
 
+/* Where a click landed, in the same coordinates the painter uses.
+ *
+ * The painter draws with absolute screen coordinates (client rect origin plus
+ * an offset); the click handler used to compare the absolute y against bare
+ * constants like `y < 36`, which only ever matched a window sitting at the top
+ * of the screen.  For any normally placed window the entire toolbar, the view
+ * switch and the list rows were unreachable -- the window looked interactive
+ * and ignored every click.  Everything below now works in client space, and
+ * the hit tests mirror the exact expressions used while painting. */
 static void explorer_mouse(void *state, int event, int x, int y, int button, int wheel) {
     explorer_t *ex = (explorer_t *)state;
     wm_rect_t c = wm_input_client_rect();
+    int rx, ry;
     (void)button;
-    if (event == APP_EV_WHEEL) { ex->scroll = k_max(0, ex->scroll - wheel); return; }
+
+    if (c.w <= 0) return;
+    rx = x - c.x;
+    ry = y - c.y;
+
+    if (event == APP_EV_WHEEL) {
+        ex->scroll = k_max(0, ex->scroll - wheel);
+        return;
+    }
     if (event != APP_EV_MOUSE_DOWN && event != APP_EV_MOUSE_DBLCLICK) return;
 
-    /* toolbar buttons */
-    if (y < 36) {
-        int bx = 8;
-        if (x >= bx && x < bx + 26) { exp_navigate(ex, ".."); return; }
+    /* ---- toolbar: up button, breadcrumbs, action buttons ---------------- */
+    if (ry >= 6 && ry < 6 + EXP_TOOL_H) {
+        if (rx >= 8 && rx < 8 + EXP_TOOL_H) { exp_navigate(ex, ".."); return; }
         {
-            int ax = c.w - 178;
-            if (x >= ax && x < ax + 60) { exp_new_file(ex, 0); return; }
-            if (x >= ax + 60 && x < ax + 120) { exp_new_file(ex, 1); return; }
-            if (x >= ax + 120 && x < ax + 180) { exp_delete(ex); return; }
+            int i;
+            for (i = 0; i < EXP_TOOL_COUNT; i++) {
+                int ax = exp_tool_x(c, i);
+                if (x >= ax && x < ax + EXP_TOOL_W) {
+                    switch (i) {
+                    case 0: exp_begin_prompt(ex, EXP_PROMPT_NEW_FILE, NULL); break;
+                    case 1: exp_begin_prompt(ex, EXP_PROMPT_NEW_DIR, NULL); break;
+                    case 2:
+                        if (ex->selected < ex->nent)
+                            exp_begin_prompt(ex, EXP_PROMPT_RENAME, ex->ent[ex->selected].name);
+                        else
+                            exp_set_status1(ex, 2, "select an item to rename");
+                        break;
+                    case 3: exp_clip(ex, 1); break;
+                    case 4: exp_clip(ex, 2); break;
+                    case 5: exp_paste(ex); break;
+                    default: break;
+                    }
+                    return;
+                }
+            }
         }
-        /* breadcrumb: rebuild click zones */
+        /* breadcrumb click zones, rebuilt from the path exactly as painted */
         {
-            char tmp[VFS_MAX_PATH];
-            int cx = 8 + 26 + 8 + 20;
+            char tmp[EXP_PATH_MAX];
+            int cx = c.x + 8 + EXP_TOOL_H + 8 + 20;
+            int crumb_limit = exp_tool_x(c, 0) - 10;
             char *p;
             kstrncpy(tmp, ex->path, sizeof(tmp) - 1);
+            tmp[sizeof(tmp) - 1] = 0;
             p = tmp;
             while (*p) {
                 char comp[64];
                 int n = 0;
-                while (*p == '/' ) p++;
+                int prefix_len;
+                while (*p == '/') p++;
                 if (!*p) break;
                 while (*p && *p != '/' && n < 63) comp[n++] = *p++;
                 comp[n] = 0;
                 {
                     int tw = gfx_text_w(comp, 0);
                     if (x >= cx && x < cx + tw) {
-                        char target[VFS_MAX_PATH];
-                        char *q = tmp;
-                        char *find = kstrchr(q, 0);
-                        (void)find;
-                        /* build the prefix up to and including this component */
-                        {
-                            const char *full = ex->path;
-                            int idx_of = (int)((p - tmp));
-                            kstrncpy(target, full, sizeof(target) - 1);
-                            if (idx_of >= 0 && idx_of < (int)kstrlen(target)) target[idx_of] = 0;
-                            exp_navigate(ex, target);
-                        }
+                        char target[EXP_PATH_MAX];
+                        kstrncpy(target, ex->path, sizeof(target) - 1);
+                        target[sizeof(target) - 1] = 0;
+                        prefix_len = (int)(p - tmp);
+                        if (prefix_len < (int)kstrlen(target)) target[prefix_len] = 0;
+                        exp_navigate(ex, target[0] ? target : "/");
                         return;
                     }
+                    if (cx + tw > crumb_limit) break;
                     cx += tw + 2 + gfx_text_w("/", 0) + 4;
                 }
             }
         }
         return;
     }
-    /* view switch */
-    if (y >= 40 && y < 62 && x < 8 + 118) {
-        ex->list_view = (x >= 8 + 58) ? 1 : 0;
+
+    /* ---- view switch (only when the prompt row is not showing) ---------- */
+    if (ex->prompt == EXP_PROMPT_NONE && ry >= 40 && ry < 62 && rx >= 8 && rx < 8 + 116) {
+        ex->list_view = (rx >= 8 + 58) ? 1 : 0;
         return;
     }
-    /* entries */
-    {
-        int list_top = c.y >= 0 ? 66 : 66;
-        (void)list_top;
-        if (!ex->list_view) {
-            int i;
-            for (i = 0; i < ex->nent; i++) {
-                wm_rect_t r = exp_icon_rect(c, i, NULL);
-                if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) {
-                    int was = ex->selected;
-                    ex->selected = i;
-                    if (event == APP_EV_MOUSE_DBLCLICK) { exp_open_entry(ex, i); return; }
-                    if (was == i && now_ms() - ex->last_click_ms < 400) {
-                        exp_open_entry(ex, i);
-                        return;
-                    }
-                    ex->last_click_ms = now_ms();
+
+    /* ---- properties panel: clicking the panel itself keeps it open ------ */
+    if (ex->show_props) {
+        int pw = 320, ph = 150;
+        int px = c.x + c.w - pw - 16;
+        int py = c.y + c.h - ph - 34;
+        if (x >= px && x < px + pw && y >= py && y < py + ph) return;
+        ex->show_props = 0;
+    }
+
+    /* ---- entries -------------------------------------------------------- */
+    if (!ex->list_view) {
+        int i;
+        for (i = 0; i < ex->nent - ex->scroll; i++) {
+            wm_rect_t r = exp_icon_rect(c, i, NULL);
+            if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) {
+                int idx = i + ex->scroll;
+                int was = ex->selected;
+                ex->selected = idx;
+                if (event == APP_EV_MOUSE_DBLCLICK) { exp_open_entry(ex, idx); return; }
+                if (was == idx && now_ms() - ex->last_click_ms < 400) {
+                    ex->last_click_ms = 0;
+                    exp_open_entry(ex, idx);
                     return;
                 }
+                ex->last_click_ms = now_ms();
+                return;
             }
-        } else {
-            int row_h = 22;
-            int idx = (y - 88) / row_h;
-            if (y >= 88 && idx >= 0 && idx < ex->nent) {
-                ex->selected = idx;
-                if (event == APP_EV_MOUSE_DBLCLICK) exp_open_entry(ex, idx);
-            }
+        }
+    } else {
+        int row_h = 22;
+        int idx = (ry - 88) / row_h + ex->scroll;
+        if (ry >= 88 && ry < c.h - 26 && idx >= 0 && idx < ex->nent) {
+            ex->selected = idx;
+            if (event == APP_EV_MOUSE_DBLCLICK) exp_open_entry(ex, idx);
+            return;
+        }
+    }
+
+    /* A click on empty space clears the selection, the way every file manager
+       behaves -- it also gives the user a way to un-highlight before pasting. */
+    if (event == APP_EV_MOUSE_DOWN && ry > 64) {
+        exp_set_status1(ex, 0, "no selection");
+    }
+}
+
+static void explorer_tick(void *state, u32 dt_ms) {
+    explorer_t *ex = (explorer_t *)state;
+    (void)dt_ms;
+    /* The VFS can change under the window (shell `touch`, the editor saving).
+       Polling the directory count is cheap and keeps the listing honest. */
+    {
+        static u32 last;
+        u32 now = now_ms();
+        if (now - last > 700) {
+            int n;
+            last = now;
+            n = vfs_dir_count(ex->path);
+            if (n >= 0 && n - 2 != ex->nent) exp_refresh(ex);
         }
     }
 }
 
+static void *explorer_create(const char *arg) {
+    explorer_t *ex = (explorer_t *)mm_kmalloc(sizeof(explorer_t));
+    if (!ex) return NULL;
+    kmemset(ex, 0, sizeof(*ex));
+    kstrncpy(ex->path, (arg && arg[0]) ? arg : vfs_cwd(), sizeof(ex->path) - 1);
+    ex->status_kind = 0;
+    exp_refresh(ex);
+    exp_set_status1(ex, 0, "Ctrl+N new file   Ctrl+D new folder   F2 rename   Del delete");
+    return ex;
+}
+
+static void explorer_destroy(void *state) { if (state) mm_kfree(state); }
+
 const app_desc_t app_explorer = {
-    "explorer", "File Explorer", "browse the VFS", ICON_FILES,
+    "explorer", "Files", "manage the file system", ICON_FILES,
     780, 520, 480, 320, APP_CAT_UTIL, 1, 1,
     explorer_create, explorer_destroy, explorer_paint, explorer_key, explorer_mouse,
     explorer_tick, NULL

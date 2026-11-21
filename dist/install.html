@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install AE</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #070b12; --panel: #101a28; --line: #1e2c3f;
+    --text: #dce8f5; --dim: #7e94ad; --accent: #4fc3f7; --ok: #4ade80; --warn: #f0b429;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    background:
+      radial-gradient(1100px 600px at 20% -10%, #10233c 0%, transparent 60%),
+      radial-gradient(900px 500px at 100% 20%, #22123a 0%, transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 40px 20px;
+  }
+  main { width: 100%; max-width: 720px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--dim); border: 1px solid var(--line); border-radius: 999px;
+    padding: 5px 14px; margin-bottom: 22px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  h1 { font-size: clamp(30px, 5vw, 44px); line-height: 1.1; margin: 0 0 10px; letter-spacing: -.02em; }
+  h1 .a { color: var(--accent); }
+  .lede { color: var(--dim); margin: 0 0 30px; max-width: 56ch; }
+  .card {
+    background: linear-gradient(180deg, #101a28, #0b121c);
+    border: 1px solid var(--line); border-radius: 16px;
+    padding: 26px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin: 0 0 16px; font-weight: 600; }
+  button.btn, a.btn {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; padding: 17px 22px; border-radius: 11px;
+    background: linear-gradient(180deg, #5ecbfa, #2f9fd4);
+    color: #04121c; font-weight: 700; font-size: 17px; text-decoration: none;
+    border: 0; cursor: pointer; font-family: inherit;
+    transition: filter .15s, transform .06s;
+  }
+  button.btn:hover, a.btn:hover { filter: brightness(1.08); }
+  button.btn:active { transform: translateY(1px); }
+  button.btn[disabled] { opacity: .75; cursor: default; }
+  .btn.secondary {
+    background: transparent; color: var(--text); border: 1px solid var(--line);
+    font-size: 15px; font-weight: 600; padding: 13px 20px;
+  }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 14px; font-size: 13px; color: var(--dim); }
+  .meta b { color: var(--text); font-weight: 600; }
+  .bar { height: 6px; background: #0a121c; border-radius: 99px; overflow: hidden; margin-top: 16px; display: none; }
+  .bar.on { display: block; }
+  .bar span { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #3fa9dd, #6fdcff); transition: width .2s; }
+  pre {
+    background: #060a11; border: 1px solid var(--line); border-radius: 9px;
+    padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.55;
+    color: #b9d3ea; margin: 0 0 12px; white-space: pre-wrap; word-break: break-all;
+  }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .hint { font-size: 13px; color: var(--dim); margin: 0; }
+  .hint b { color: var(--text); }
+  .step { display: none; }
+  .step.on { display: block; }
+  #result-box { display: none; }
+  #result-box.on { display: block; }
+  ol { margin: 0; padding-left: 20px; color: var(--dim); font-size: 14.5px; }
+  ol li { margin-bottom: 7px; }
+  ol li b { color: var(--text); }
+  .warn {
+    border-left: 3px solid var(--warn); background: #1a1508;
+    padding: 12px 16px; border-radius: 0 8px 8px 0;
+    font-size: 14px; color: #e6cf9a; margin-top: 16px;
+  }
+  .err { border-left-color: #ef4444; background: #1a0b0b; color: #f5b5b5; }
+  .ok { border-left-color: var(--ok); background: #0b1a12; color: #a7f3c9; }
+  footer { margin-top: 26px; font-size: 12.5px; color: #5c7189; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <div class="badge"><span class="dot"></span> AE 1.0.0-aether · Windows 10/11 · x86-64</div>
+  <h1>Install <span class="a">AE</span></h1>
+  <p class="lede">
+    One button. It fetches the executable, checks its SHA-256, saves it to your
+    Downloads folder and starts it. Nothing to type, nothing to allow beyond the
+    usual Windows warning for an unsigned binary.
+  </p>
+
+  <!-- ================= step 1: the button ================= -->
+  <div class="card step on" id="step-main">
+    <h2>Windows</h2>
+    <button class="btn" id="go">⤓ Install AE — 821,760 bytes</button>
+    <div class="bar" id="bar"><span id="fill"></span></div>
+    <div class="meta">
+      <span><b>821,760</b> bytes</span>
+      <span>verified <b>SHA-256</b></span>
+      <span>no installer, no runtime</span>
+    </div>
+    <div class="warn">
+      Windows will warn that the publisher is unknown, because the binary is not
+      code-signed. Choose <b>More info → Run anyway</b>.
+    </div>
+  </div>
+
+  <!-- ================= step 2: it is running ================= -->
+  <div class="card step" id="step-launching">
+    <h2>Saving</h2>
+    <p class="hint" id="launch-msg" style="font-size:15px">
+      Your browser is saving <b>AE.exe</b> now.
+    </p>
+    <div class="warn" style="border-left-color:var(--ok);background:#0b1a12;color:#a7f3c9">
+      When it finishes, open <b>AE.exe</b> from your Downloads folder. That is the
+      whole product — an operating system in one executable.
+    </div>
+  </div>
+
+  <!-- ================= step 3: failure ================= -->
+  <div class="card step" id="step-fail">
+    <h2>That did not work</h2>
+    <div class="warn err" id="fail-msg" style="margin-top:0"></div>
+    <p class="hint" style="margin-top:14px">
+      Use the direct link instead — right-click and choose <b>Save link as…</b>:
+    </p>
+    <pre><code id="fail-link"></code></pre>
+    <p class="hint" style="margin-top:14px">Or run one line in PowerShell:</p>
+    <pre><code id="ps-cmd"></code></pre>
+    <button class="btn secondary" id="retry" style="margin-top:6px">Try again</button>
+  </div>
+
+  <!-- ================= result ================= -->
+  <div class="card" id="result-box">
+    <h2 id="result-title">Done</h2>
+    <p class="hint" id="result-body" style="font-size:14.5px"></p>
+  </div>
+
+  <div class="card">
+    <h2>What this page does</h2>
+    <ol>
+      <li><b>Fetch</b> — it requests <code>dist/AE.exe</code> from the repository over the GitHub API, which serves the exact committed bytes.</li>
+      <li><b>Verify</b> — it recomputes the SHA-256 in your browser with <code>crypto.subtle</code> and refuses to save a mismatch.</li>
+      <li><b>Save</b> — it hands the verified bytes to the browser as a download named <code>AE.exe</code>.</li>
+    </ol>
+    <p class="hint" style="margin-top:12px">
+      No build happens here and nothing is uploaded: the file is already in the
+      repository, and this page only exists because GitHub serves repository files
+      as <code>text/plain</code>, which a browser displays instead of downloading.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Not on Windows?</h2>
+    <a class="btn secondary" id="html-link" href="#" download>↓ AE.html — runs in any browser</a>
+    <p class="hint" style="margin-top:12px">
+      The same operating system compiled to WebAssembly, in one page. Works on
+      macOS and Linux.
+    </p>
+  </div>
+
+  <footer>AE · Architecture Environment · SPORstudio · MIT</footer>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* The repository and branch are baked in so the page works when it is opened
+     from anywhere -- a saved copy in Downloads has no idea where it came from.
+     `main` is used because this page is meant to outlive the pull request the
+     build arrived in; the SHA-256 below pins the exact bytes either way. */
+  var OWNER = 'SPORstudio-Official';
+  var REPO  = 'moddelingmym';
+  var REF   = 'main';
+  var FILE  = 'dist/AE.exe';
+  var SHA   = '99349ca3aec446e3742fe7efd30f61fdcbfd495b677a660f7d00f2af0e24a5cc';
+  var BYTES = 821760;
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* The API route, not the raw route: raw.githubusercontent.com sends
+     text/plain (the browser shows the exe as garbage) and needs a redirect to a
+     host that some networks block. The API's raw media type returns the file
+     bytes with a JSON 404 if the path is wrong, which is a much better failure. */
+  var API_URL = 'https://api.github.com/repos/' + OWNER + '/' + REPO +
+                '/contents/' + FILE + '?ref=' + REF;
+
+  $('ps-cmd').textContent =
+    'powershell -NoProfile -ExecutionPolicy Bypass -Command "' +
+    'irm https://github.com/' + OWNER + '/' + REPO + '/raw/' + REF + '/' + FILE +
+    ' -OutFile $env:TEMP\\AE.exe; Start-Process $env:TEMP\\AE.exe"';
+  $('fail-link').textContent = API_URL;
+  $('html-link').href = 'https://github.com/' + OWNER + '/' + REPO +
+                        '/raw/' + REF + '/dist/AE.html';
+
+  function show(step) {
+    ['step-main', 'step-launching', 'step-fail'].forEach(function (id) {
+      $(id).classList.toggle('on', id === step);
+    });
+  }
+
+  function fail(title, detail, link) {
+    $('fail-msg').innerHTML = '<b>' + title + '</b><br>' + detail;
+    if (link) $('fail-link').textContent = link;
+    show('step-fail');
+    $('bar').classList.remove('on');
+    $('go').disabled = false;
+    $('go').textContent = '⤓ Try again';
+  }
+
+  function toHex(buf) {
+    var b = new Uint8Array(buf), s = '', i;
+    for (i = 0; i < b.length; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16);
+    return s;
+  }
+
+  /* Fallback for non-secure origins or browsers without crypto.subtle: the page
+     still saves the file, but says the hash could not be checked rather than
+     claiming a check that did not happen. */
+  function sha256(buf) {
+    if (!(window.crypto && window.crypto.subtle)) return Promise.resolve(null);
+    return window.crypto.subtle.digest('SHA-256', buf).then(toHex);
+  }
+
+  function save(buf, name) {
+    var blob = new Blob([buf], { type: 'application/octet-stream' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    /* Revoking immediately can cancel the download in some browsers. */
+    setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+  }
+
+  function start() {
+    $('go').disabled = true;
+    $('go').textContent = 'Downloading…';
+    $('bar').classList.add('on');
+    $('fill').style.width = '8%';
+    $('result-box').classList.remove('on');
+    show('step-main');
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', API_URL, true);
+    xhr.responseType = 'arraybuffer';
+    /* Without this the API answers with a JSON describing the file instead of
+       the file itself. */
+    xhr.setRequestHeader('Accept', 'application/vnd.github.raw');
+
+    xhr.onprogress = function (e) {
+      if (e.lengthComputable && e.total) {
+        var pct = Math.max(8, Math.round((e.loaded / e.total) * 100));
+        $('fill').style.width = pct + '%';
+      } else if (e.loaded) {
+        var pct2 = Math.min(97, 8 + (e.loaded / BYTES) * 89);
+        $('fill').style.width = pct2.toFixed(1) + '%';
+      }
+    };
+
+    xhr.onerror = function () {
+      fail('The request failed.',
+        'The browser could not reach api.github.com. That is usually a network ' +
+        'filter, an offline connection, or an extension blocking requests.',
+        API_URL);
+    };
+
+    xhr.onload = function () {
+      var ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
+
+      if (xhr.status === 404) {
+        fail('The file is not on that branch yet.',
+          'The repository answered 404 for <code>' + FILE + '</code> at ' +
+          '<code>' + REF + '</code>. If this build is still in review, the pull ' +
+          'request has not been merged, so the file is only on the branch that ' +
+          'contains it.', API_URL);
+        return;
+      }
+      if (xhr.status !== 200) {
+        fail('GitHub answered HTTP ' + xhr.status + '.',
+          'That is not a response this page can use.', API_URL);
+        return;
+      }
+      if (ct.indexOf('json') !== -1) {
+        fail('GitHub returned a description, not the file.',
+          'The API answered with JSON. This can happen when the repository is ' +
+          'private and the request is not signed in.', API_URL);
+        return;
+      }
+
+      var buf = xhr.response;
+      if (!buf || !buf.byteLength) {
+        fail('The download was empty.', 'Zero bytes came back.', API_URL);
+        return;
+      }
+
+      $('fill').style.width = '100%';
+
+      sha256(buf).then(function (digest) {
+        if (digest === null) {
+          /* No WebCrypto: save it, but be honest about the unchecked hash. */
+          save(buf, 'AE.exe');
+          $('result-title').textContent = 'Saved — hash not verified';
+          $('result-body').innerHTML =
+            'Your browser does not expose <code>crypto.subtle</code> here, so ' +
+            'the SHA-256 could not be recomputed. The file is ' +
+            buf.byteLength.toLocaleString() + ' bytes; it should be ' +
+            SHA + '.';
+          $('result-box').classList.add('on');
+          show('step-launching');
+          return;
+        }
+        if (digest !== SHA) {
+          fail('Checksum mismatch — nothing was saved.',
+            'Expected <code>' + SHA + '</code> but got <code>' + digest +
+            '</code>. The bytes served do not match this page\'s pinned build, ' +
+            'so it refused to hand you a file it cannot vouch for.');
+          return;
+        }
+        save(buf, 'AE.exe');
+        $('result-title').textContent = 'Saved and verified';
+        $('result-body').innerHTML =
+          '<b>' + buf.byteLength.toLocaleString() + ' bytes</b>, SHA-256 ' +
+          '<code>' + digest + '</code> — matches. Open <b>AE.exe</b> from your ' +
+          'Downloads folder.';
+        $('result-box').classList.add('on');
+        show('step-launching');
+      }).catch(function (e) {
+        fail('The check itself failed.', String(e && e.message || e), API_URL);
+      });
+    };
+
+    xhr.send();
+  }
+
+  $('go').addEventListener('click', start);
+  $('retry').addEventListener('click', function () {
+    $('go').disabled = false;
+    $('go').textContent = '⤓ Install AE — 821,760 bytes';
+    show('step-main');
+  });
+})();
+</script>
+</body>
+</html>

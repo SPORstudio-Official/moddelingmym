@@ -132,9 +132,15 @@ static void hexview_paint(void *state, window_t *w, wm_rect_t c) {
         else
             ksnprintf(buf, sizeof(buf), "%s  64 MiB  0x00000000-0x%08X   offset 0x%08X",
                       hex_source_name(hv->src), (unsigned)PHYS_RAM_SIZE, (unsigned)hv->offset);
-        gfx_text(x, y, buf, t->text_dim, 0);
-        gfx_text_right(c.x + c.w - 10, y, hv->follow ? "auto-refresh ON" : "auto-refresh off",
-                       hv->follow ? t->ok : t->text_mute, 0);
+        /* The status word is right-aligned on the same line as the source
+           description.  On a narrow window the two ran into each other, so the
+           description is clipped to whatever room the word leaves. */
+        {
+            const char *flag = hv->follow ? "auto-refresh ON" : "auto-refresh off";
+            int flag_w = gfx_text_w(flag, 0) + 16;
+            gfx_text_clip(x, y, c.w - 10 - flag_w, buf, t->text_dim, 0);
+            gfx_text_right(c.x + c.w - 10, y, flag, hv->follow ? t->ok : t->text_mute, 0);
+        }
     }
     y += 22;
 
@@ -145,8 +151,12 @@ static void hexview_paint(void *state, window_t *w, wm_rect_t c) {
         gfx_round_rect(c.x + 4, y - 4, c.w - 8, rows * 16 + 26, 4, RGBA(6, 9, 14, 240));
         gfx_text(x + 4, y, "ADDRESS   ", t->text_mute, 0);
         {
+            /* kstrcat appends, so this must start empty: an uninitialised
+               buffer printed whatever the previous frame left on the stack
+               (which is what drew a metadata line over the column headers). */
             char hdr[80];
             int k = 0;
+            hdr[0] = 0;
             for (k = 0; k < hv->bytes_per_row; k++) {
                 char tmp[4];
                 ksnprintf(tmp, sizeof(tmp), "%02X ", k);

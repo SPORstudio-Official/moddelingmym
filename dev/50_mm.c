@@ -201,11 +201,17 @@ void *mm_alloc_tagged(u32 size, u32 tag) {
     if (size == 0) size = 1;
     want = (size + MM_ALIGN - 1) & ~(u32)(MM_ALIGN - 1);
     for (b = g_mm.free_list; b; b = mm_next_free(b)) {
-#ifdef AETHER_MM_DEBUG
+#if defined(AETHER_MM_DEBUG) && !defined(AETHER_WASM)
         if ((u8 *)b < (u8 *)g_mm.head || (u8 *)b >= (u8 *)g_mm.head + HEAP_SIZE) {
             fprintf(stderr, "[mm] CORRUPT free_list node %p outside heap, want=%u\n",
                     (void *)b, (unsigned)want);
             abort();
+        }
+#elif defined(AETHER_MM_DEBUG) && defined(AETHER_WASM)
+        /* No stdio in the wasm module; report through the kernel log instead. */
+        if ((u8 *)b < (u8 *)g_mm.head || (u8 *)b >= (u8 *)g_mm.head + HEAP_SIZE) {
+            klog("[mm] CORRUPT free_list node outside heap, want=%u", (unsigned)want);
+            for (;;) { }
         }
 #endif
         if (b->magic != MM_MAGIC_FREE) { g_mm.scan_hits++; continue; }
@@ -349,7 +355,7 @@ int mm_kfree(void *ptr) {
        on the list made the list hold interior pointers (and eventually a
        cycle), after which an allocation could be handed a block that overlapped
        a live one -- the corruption that used to show up as a free-list node
-       pointing into the string "AetherOS". */
+       pointing into the string "AE". */
     /* backward coalesce */
     if (b->prev && (b->prev->flags & MM_FLAG_FREE) && b->prev->magic == MM_MAGIC_FREE) {
         mm_block_t *p = b->prev;
