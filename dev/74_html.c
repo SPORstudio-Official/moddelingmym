@@ -13,9 +13,15 @@
  *  documentation, wikis, news, search results -- very well.
  * ========================================================================== */
 
-#define HTML_MAX_BLOCKS   768
-#define HTML_MAX_LINKS    192
-#define HTML_TEXT_MAX     8192
+/* Document capacity.  These were small enough to be a user-visible bug: a real
+ * article page ran out of text at 8 KB (html_text_add() silently dropped
+ * everything after that, so the page simply stopped mid-sentence with no error)
+ * and a long page overflowed the u16 block coordinates below.  The buffers live
+ * in dynamically allocated html_doc_t, not on the stack, so raising them costs
+ * heap rather than stack -- 2 MB is affordable out of a 31 MB heap. */
+#define HTML_MAX_BLOCKS   4096
+#define HTML_MAX_LINKS    1024
+#define HTML_TEXT_MAX     (2 * 1024 * 1024)
 #define HTML_HREF_MAX     256
 #define HTML_URL_MAX      512
 
@@ -28,8 +34,8 @@ typedef struct {
     u8   kind;              /* HTML_*                                       */
     u8   level;             /* heading level, 1..6                          */
     u8   first_line;        /* starts an anchor span (for link runs)        */
-    u16  y;                 /* resolved during layout                       */
-    u16  h;
+    int  y;                 /* resolved during layout                       */
+    int  h;
 } html_block_t;
 
 typedef struct {
@@ -49,6 +55,7 @@ typedef struct {
     html_link_t links[HTML_MAX_LINKS];
     int   link_count;
     int   total_h;          /* laid-out height in pixels                    */
+    int   truncated;        /* content was dropped: the page did not fit    */
     int   ok;
     int   error_kind;       /* 0 none, 1 network, 2 parse, 3 empty          */
     char  status[96];
@@ -123,7 +130,8 @@ static int html_is_block(const char *tag) {
 
 static void html_block_push(html_doc_t *d, int kind, int level) {
     html_block_t *b;
-    if (d->block_count >= HTML_MAX_BLOCKS) return;
+    (void)0;
+    if (d->block_count >= HTML_MAX_BLOCKS) { d->truncated = 1; return; }
     b = &d->blocks[d->block_count++];
     kmemset(b, 0, sizeof(*b));
     b->kind = (u8)kind;
@@ -137,7 +145,7 @@ static void html_text_add(html_doc_t *d, char ch) {
     int len;
     if (d->block_count == 0) html_block_push(d, HTML_BODY, 0);
     b = &d->blocks[d->block_count - 1];
-    if (d->text_len >= HTML_TEXT_MAX - 1) return;
+    if (d->text_len >= HTML_TEXT_MAX - 1) { d->truncated = 1; return; }
     len = d->text_len - b->text_off;
     if (len >= (int)sizeof(b->text) - 1) return;
     if (ch == ' ' && len > 0 && d->text[d->text_len - 1] == ' ') return;

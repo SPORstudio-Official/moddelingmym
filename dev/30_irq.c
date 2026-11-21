@@ -307,10 +307,39 @@ u8 irq_buttons_from_host(int host) {
     return b;
 }
 
+/* Did the key event immediately before this one already deliver `ch`?
+ *
+ * The host emits KEYDOWN(vk) followed by CHAR(ch) for the same physical press.
+ * Most keys need that split -- the vk drives shortcuts, the ch drives text --
+ * but for the four control characters below, both halves map to the same
+ * scancode and the desktop acts on each, so the line ran twice.  The rule is
+ * deliberately narrow: only a key event seen since the previous drain counts,
+ * so genuine repeats of a printable character are unaffected.
+ */
+static int g_last_key_vk;
+static int g_last_key_seen;
+
+static int irq_glyph_already_delivered(int ch) {
+    int vk = 0;
+    switch (ch) {
+    case 13: vk = 0x0D; break;
+    case 8:  vk = 0x08; break;
+    case 9:  vk = 0x09; break;
+    default: return 0;
+    }
+    if (g_last_key_seen && g_last_key_vk == vk) {
+        g_last_key_seen = 0;      /* consume it: one press, one delivery */
+        return 1;
+    }
+    return 0;
+}
+
 void irq_host_event(const hal_event_t *ev) {
     switch (ev->type) {
     case HAL_EV_KEYDOWN: {
         u8 sc = host_vk_to_scancode(ev->key);
+        g_last_key_vk = ev->key;
+        g_last_key_seen = 1;
         /* Deliver the transition only: no glyph.
            A GUI host resolves the character itself (Shift, CapsLock, dead keys,
            keyboard layout) and sends it as a separate HAL_EV_CHAR right after
@@ -330,6 +359,16 @@ void irq_host_event(const hal_event_t *ev) {
         break;
     }
     case HAL_EV_CHAR: {
+        /* An ASCII printable repeats the scancode the KEYDOWN for the same key
+           already delivered?  No -- the host sends KEYDOWN with no glyph and
+           CHAR with no key, so exactly one transition reaches the desktop for
+           a printable character.  The control keys below are different: Enter
+           arrives as KEYDOWN(vk 0x0D) *and* CHAR(13), and both map to scancode
+           0x1C, so the shell saw "\r" from the first and "\n" from the second
+           and executed the line twice.  Suppressing the glyph when a key event
+           for the same character was just delivered fixes the double-execute
+           without dropping the character itself. */
+        if (irq_glyph_already_delivered(ev->ch)) break;
         if (ev->ch >= 32 && ev->ch < 127) {
             /* the host already applied modifiers; deliver the final glyph */
             irq_keyboard_push(0x00, 1, (char)ev->ch);

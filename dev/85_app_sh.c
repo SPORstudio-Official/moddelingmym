@@ -69,6 +69,17 @@ static void sh_emit(shell_t *sh, u8 color, const char *text) {
         ln->color = cur;
         used = 0;
         while (text[i] && text[i] != '\n') {
+            /* Colour markers are stripped anywhere in the line, not just at the
+               start of one.  Only the outer loop used to consume them, so any
+               marker embedded mid-line was copied into the line buffer and then
+               rendered as '?' by the font -- which is why every prompt read
+               "user@aether??:/home/user$": the \x07 end-of-colour and the \x02
+               of the second colour span both came out as question marks. */
+            if ((u8)text[i] >= 1 && (u8)text[i] <= 8) {
+                cur = (u8)text[i];
+                i++;
+                continue;
+            }
             if (used >= TERM_COLS - 1) {
                 /* wrap */
                 ln->text[used] = 0;
@@ -82,6 +93,7 @@ static void sh_emit(shell_t *sh, u8 color, const char *text) {
                 ln->color = cur;
                 used = 0;
             }
+            ln->color = cur;
             ln->text[used++] = text[i++];
         }
         ln->text[used] = 0;

@@ -63,14 +63,24 @@ static void br_normalize(const char *in, char *out, int cap) {
     if (!kstrchr(tmp, '.')) {
         char q[BR_ADDR_MAX];
         int j = 0, k = 0;
+        static const char hex[] = "0123456789ABCDEF";
         kstrcpy(q, "https://lite.duckduckgo.com/lite/?q=");
         k = (int)kstrlen(q);
         for (j = 0; tmp[j] && k < BR_ADDR_MAX - 4; j++) {
-            char c = tmp[j];
-            if (c == ' ') { q[k++] = '+'; }
+            unsigned char c = (unsigned char)tmp[j];
+            if (c == ' ') q[k++] = '+';
             else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                     (c >= '0' && c <= '9') || c == '-' || c == '_') q[k++] = c;
-            else { q[k++] = '%'; q[k++] = '2'; q[k++] = '5'; /* ' ' only */ }
+                     (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
+                q[k++] = (char)c;
+            else {
+                /* Percent-encode properly.  The old code wrote the literal
+                   sequence "%25" for *every* non-alphanumeric, so a search for
+                   "c++" asked for the literal text "c%25%25" -- and any search
+                   containing punctuation returned nothing. */
+                q[k++] = '%';
+                q[k++] = hex[(c >> 4) & 0xF];
+                q[k++] = hex[c & 0xF];
+            }
         }
         q[k] = 0;
         kstrncpy(out, q, cap - 1);
@@ -283,6 +293,12 @@ static void br_complete(browser_t *b, int len) {
         d->error_kind = 3;
         b->status_kind = 2;
         ksnprintf(b->status, sizeof(b->status), "the page had no readable text");
+    } else if (d->truncated) {
+        /* The page exceeded the readable-document budget.  Saying so is better
+           than silently stopping mid-sentence, which is what used to happen. */
+        b->status_kind = 2;
+        ksnprintf(b->status, sizeof(b->status),
+                  "%d KB -- page truncated, showing the first part", len / 1024);
     } else {
         b->status_kind = 1;
         ksnprintf(b->status, sizeof(b->status), "%d KB, %d blocks",
@@ -512,8 +528,13 @@ static void browser_key(void *state, int key, int ch, int mods) {
 
     if (b->editing) {
         int n = (int)kstrlen(b->addr);
-        if (key == 0x0D) {                       /* Enter   */
+        /* Enter arrives twice: once as the key code and once as the '\n' glyph,
+           depending on the chassis.  Both must navigate, and navigating twice
+           must not happen -- so navigation clears `editing` first and the glyph
+           path only fires when the key path did not already run. */
+        if (key == 0x0D || ch == '\n' || ch == '\r') {
             char u[BR_ADDR_MAX];
+            if (!b->editing) return;
             b->editing = 0;
             kstrcpy(u, b->addr);
             br_load(b, u);

@@ -809,14 +809,21 @@ int net_poll(int slot) {
  * a negative NET_ERR_* code. */
 int net_finish(int slot, char *dst, int cap) {
     int len = js_http_len(slot);
-    if (len > AETHER_HTTP_MAX_BODY || len > cap) {
-        js_http_release(slot);
-        return NET_ERR_TOO_BIG;
-    }
-    if (len > 0) js_http_read(slot, dst, len);
-    dst[len > 0 ? len : 0] = 0;
+    int take;
+    if (len < 0) { js_http_release(slot); return NET_ERR_IO; }
+    /* A body bigger than the destination used to be an outright failure, which
+       is why large pages reported "the page is too large to display" and showed
+       nothing at all.  Reading the part that fits and marking the result as
+       truncated is far more useful: the reader still gets the article.  The cap
+       is a real limit (the wasm module has 64 MB of linear memory), but it is a
+       limit on the *copy*, not a reason to refuse the page. */
+    take = len;
+    if (take > cap - 1) take = cap - 1;
+    if (take > AETHER_HTTP_MAX_BODY) take = AETHER_HTTP_MAX_BODY;
+    if (take > 0) js_http_read(slot, dst, take);
+    dst[take > 0 ? take : 0] = 0;
     js_http_release(slot);
-    return len;
+    return take;
 }
 
 void net_abort(int slot) { js_http_release(slot); }
