@@ -96,10 +96,10 @@
   <!-- ================= step 1: the button ================= -->
   <div class="card step on" id="step-main">
     <h2>Windows</h2>
-    <button class="btn" id="go">⤓ Install AE — 821,760 bytes</button>
+    <button class="btn" id="go">⤓ Install AE — 885,760 bytes</button>
     <div class="bar" id="bar"><span id="fill"></span></div>
     <div class="meta">
-      <span><b>821,760</b> bytes</span>
+      <span><b>885,760</b> bytes</span>
       <span>verified <b>SHA-256</b></span>
       <span>no installer, no runtime</span>
     </div>
@@ -178,8 +178,8 @@
   var REPO  = 'moddelingmym';
   var REF   = 'main';
   var FILE  = 'dist/AE.exe';
-  var SHA   = '13e413603a01538295d789a236de6e0f1fb58221c4541369432a94ada7ea0538';
-  var BYTES = 821760;
+  var SHA   = 'e12239e479bc0972532894e9fdba106c551c9e881f911af8a2e66d48f816108d';
+  var BYTES = 885760;
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -344,7 +344,7 @@
   $('go').addEventListener('click', start);
   $('retry').addEventListener('click', function () {
     $('go').disabled = false;
-    $('go').textContent = '⤓ Install AE — 821,760 bytes';
+    $('go').textContent = '⤓ Install AE — 885,760 bytes';
     show('step-main');
   });
 })();

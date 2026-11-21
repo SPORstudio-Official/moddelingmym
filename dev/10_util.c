@@ -69,10 +69,37 @@ int kmemcmp(const void *a, const void *b, size_t n) {
     return 0;
 }
 
-size_t kstrlen(const char *s) {
+/* ---------------------------------------------------------------------------
+ *  Why this one function carries a warning sign
+ *
+ *  `if (!s) return 0;` followed by `while (s[n])` is the obvious way to write a
+ *  NULL-tolerant strlen, and it is what this function used to say.  clang then
+ *  recognises the body as *the* strlen algorithm, folds it into the
+ *  `__builtin_strlen` intrinsic, and -- because the declaration is a plain,
+ *  non-`noundef` one -- decides that the *return value* may still be poison in
+ *  the branch where the pointer it could not prove non-NULL was NULL.  Any
+ *  caller that uses that length to shape its arguments inherits the poison.
+ *
+ *  winhttp_fetch_inner() is exactly such a caller: it passes
+ *  `blen ? body : NO_DATA` and `(DWORD)blen` to WinHttpSendRequest().  At -O1
+ *  and above clang propagated poison out of that call, concluded the whole
+ *  request-building block was unreachable, deleted it, and left a single `int3`
+ *  where the HTTP request should have been.  The shipped AE.exe therefore
+ *  imported only six WinHttp* functions instead of eleven: every page load and
+ *  every MCP search would have trapped instead of fetching.
+ *
+ *  The `&&` form below is semantically identical but is upstream guarded by a
+ *  non-NULL check, which keeps clang from attributing an unprovable value to the
+ *  emptiness test, so the intrinsic fold no longer produces poison.  `noinline`
+ *  is belt and braces: it keeps this shape out of the optimiser's inliner, where
+ *  the poison could be reintroduced in a future version.
+ *
+ *  tools/import_test.js fails the build if any function the sources call is
+ *  missing from the import table, so this cannot silently come back.
+ * ------------------------------------------------------------------------ */
+__attribute__((noinline)) size_t kstrlen(const char *s) {
     size_t n = 0;
-    if (!s) return 0;
-    while (s[n]) n++;
+    while (s && s[n]) n++;
     return n;
 }
 

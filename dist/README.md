@@ -13,7 +13,7 @@ That page has the install button. The direct links, if you want them:
 | What | Link | What it does |
 | --- | --- | --- |
 | **Install** | [`install-ae.cmd`](install-ae.cmd) | downloads AE, verifies the SHA-256, installs to `%LOCALAPPDATA%\AE`, adds a Start-menu shortcut, starts it |
-| **Run directly** | [`AE.exe`](AE.exe) | no install at all — 821,760 bytes, double-click |
+| **Run directly** | [`AE.exe`](AE.exe) | no install at all — 885,760 bytes, double-click |
 | **In a browser** | [`AE.html`](AE.html) | the same OS as WebAssembly; macOS and Linux too |
 
 One line, no download step:
@@ -29,7 +29,7 @@ Choose **More info → Run anyway**.
 
 ## 1. `AE.exe` — the real thing  ✅ recommended
 
-**821,760 bytes** — SHA-256 `13e413603a01538295d789a236de6e0f1fb58221c4541369432a94ada7ea0538`
+**885,760 bytes** — SHA-256 `e12239e479bc0972532894e9fdba106c551c9e881f911af8a2e66d48f816108d`
 
 Windows 10/11, x86-64. No installer, no browser, no dependencies: double-click it
 and AE is running as a native program.
