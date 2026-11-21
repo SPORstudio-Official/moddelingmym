@@ -1,9 +1,9 @@
 @echo off
-REM AetherOS -- open the single-file build in a chrome-less app window.
+REM AE -- open the single-file build in a chrome-less app window.
 setlocal
-set "APP=%~dp0AetherOS.html"
+set "APP=%~dp0AE.html"
 if not exist "%APP%" (
-  echo AetherOS.html is missing next to this launcher.
+  echo AE.html is missing next to this launcher.
   pause
   exit /b 1
 )

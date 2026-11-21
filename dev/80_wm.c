@@ -698,7 +698,7 @@ static void ctx_items(int kind, ctx_item_t *out, int *n, char *title, int title_
         out[i++] = (ctx_item_t){ "System monitor",    "",         CTX_ACT_SYSMON,       1, 0 };
         out[i++] = (ctx_item_t){ "Shell reference",   "",         CTX_ACT_SHELL_REF,    1, 0 };
         out[i++] = (ctx_item_t){ "", "", CTX_ACT_SEPARATOR, 0, 0 };
-        out[i++] = (ctx_item_t){ "About AetherOS",    "",         CTX_ACT_ABOUT,        1, 0 };
+        out[i++] = (ctx_item_t){ "About AE",    "",         CTX_ACT_ABOUT,        1, 0 };
         break;
 
     case CTX_ICON: {
@@ -710,7 +710,7 @@ static void ctx_items(int kind, ctx_item_t *out, int *n, char *title, int title_
         out[i++] = (ctx_item_t){ "Appearance...",     "",         CTX_ACT_APPEARANCE,   1, 0 };
         out[i++] = (ctx_item_t){ "System monitor",    "",         CTX_ACT_SYSMON,       1, 0 };
         out[i++] = (ctx_item_t){ "", "", CTX_ACT_SEPARATOR, 0, 0 };
-        out[i++] = (ctx_item_t){ "About AetherOS",    "",         CTX_ACT_ABOUT,        1, 0 };
+        out[i++] = (ctx_item_t){ "About AE",    "",         CTX_ACT_ABOUT,        1, 0 };
         break;
     }
 
@@ -806,7 +806,7 @@ static void ctx_run(int action) {
     case CTX_ACT_SYSMON:       { const app_desc_t *d = app_by_id("sysmon");   if (d) wm_open_app(d, NULL); break; }
     case CTX_ACT_SHELL_REF: {
         const app_desc_t *d = app_by_id("browser");
-        if (d) wm_open_app(d, "aether://commands");
+        if (d) wm_open_app(d, "ae://commands");
         break;
     }
     case CTX_ACT_MINIMIZE:   wm_minimize(target); break;
@@ -821,7 +821,7 @@ static void ctx_run(int action) {
     case CTX_ACT_SNAP_RIGHT: wm_snap_window(target, 2); break;
     case CTX_ACT_CLOSE:      wm_close_window(target); break;
     case CTX_ACT_ABOUT: {
-        notify_ex("AetherOS " AETHER_VERSION_STR " (" AETHER_CODENAME ") -- right-click anywhere", 0);
+        notify_ex("AE " AE_VERSION_STR " (" AE_CODENAME ") -- right-click anywhere", 0);
         break;
     }
     case CTX_ACT_REFRESH_DESKTOP:
@@ -1210,8 +1210,8 @@ static void paint_start_menu(void) {
     /* header */
     gfx_gradient_v(m.x + 1, m.y + 1, m.w - 2, 44, RGBA(40, 62, 92, 255), RGBA(20, 30, 46, 255));
     gfx_draw_icon(1, m.x + 12, m.y + 10, 22);
-    gfx_text(m.x + 42, m.y + 8, "AetherOS", t->text, 2);
-    gfx_text(m.x + 42, m.y + 27, AETHER_VERSION_STR "  --  " AETHER_CODENAME, t->text_dim, 0);
+    gfx_text(m.x + 42, m.y + 8, "AE", t->text, 2);
+    gfx_text(m.x + 42, m.y + 27, AE_VERSION_STR "  --  " AE_CODENAME, t->text_dim, 0);
     (void)n;
 
     y = m.y + 46;
@@ -1810,7 +1810,7 @@ void wm_on_key(int key, int ch, int mods) {
     /* Ctrl+F1 or F1 with nothing focused: keyboard shortcut reference. */
     if (key == 0x70 && (mods & MOD_CTRL)) {
         const app_desc_t *d = app_by_id("browser");
-        if (d) wm_open_app(d, "aether://keys");
+        if (d) wm_open_app(d, "ae://keys");
         return;
     }
 

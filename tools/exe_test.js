@@ -1,12 +1,12 @@
 /* ==========================================================================
- *  dist/AetherOS.exe structural test
+ *  dist/AE.exe structural test
  *
  *  The launcher is Windows code and cannot run here, so this checks everything
  *  that CAN be checked without Windows:
  *
  *    1. it is a well-formed PE32+ GUI executable, x86-64;
  *    2. its import table names only functions that exist on Windows 10/11;
- *    3. the payload embedded in it is byte-identical to dist/AetherOS.html;
+ *    3. the payload embedded in it is byte-identical to dist/AE.html;
  *    4. that payload, extracted the way the launcher extracts it, boots the OS
  *       in a JavaScript engine -- so the bytes the exe will write to %TEMP% are
  *       proven good, not just present.
@@ -20,8 +20,8 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
-const EXE = path.join(ROOT, 'dist', 'AetherOS.exe');
-const HTML = path.join(ROOT, 'dist', 'AetherOS.html');
+const EXE = path.join(ROOT, 'dist', 'AE.exe');
+const HTML = path.join(ROOT, 'dist', 'AE.html');
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -30,12 +30,12 @@ function check(name, cond, detail) {
 }
 
 if (!fs.existsSync(EXE)) {
-  console.error('dist/AetherOS.exe missing -- run: bash tools/build_exe.sh');
+  console.error('dist/AE.exe missing -- run: bash tools/build_exe.sh');
   process.exit(1);
 }
 
 const exe = fs.readFileSync(EXE);
-console.log('AetherOS.exe test\n');
+console.log('AE.exe test\n');
 
 /* ---- 1. PE structure --------------------------------------------------- */
 const peOff = exe.readUInt32LE(0x3c);
@@ -93,7 +93,7 @@ let payload = null;
 if (idx > 0) {
   payload = exe.slice(idx);
   const html = fs.readFileSync(HTML);
-  check('payload is byte-identical to dist/AetherOS.html',
+  check('payload is byte-identical to dist/AE.html',
     payload.length === html.length && payload.equals(html),
     payload.length + ' vs ' + html.length + ' bytes');
   check('payload is complete (ends with </html>)',
@@ -172,7 +172,7 @@ if (payload) {
 
   try {
     vm.createContext(sandbox);
-    for (const s of scripts) vm.runInContext(s, sandbox, { filename: 'AetherOS.exe:payload' });
+    for (const s of scripts) vm.runInContext(s, sandbox, { filename: 'AE.exe:payload' });
   } catch (err) {
     check('payload scripts execute', false, String(err && err.message));
   }
@@ -198,7 +198,7 @@ if (payload) {
         const slash = Math.max(app.lastIndexOf('\\'), app.lastIndexOf('/'));
         const prof = app.slice(0, slash + 1);
         let url = '--app="file:///' + app.replace(/\\/g, '/') + '"';
-        url += ' --window-size=1320,820 --user-data-dir="' + prof + 'AetherOS-profile"';
+        url += ' --window-size=1320,820 --user-data-dir="' + prof + 'AE-profile"';
         return '"' + browserPath + '" ' + url;
       }
       function splitArgv(s) {
@@ -213,13 +213,13 @@ if (payload) {
         if (cur) out.push(cur);
         return out;
       }
-      const spaced = 'C:\\Users\\Bob Smith\\AppData\\Local\\Temp\\AetherOS.html';
+      const spaced = 'C:\\Users\\Bob Smith\\AppData\\Local\\Temp\\AE.html';
       const browser = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
       const argv = splitArgv(buildLine(spaced, browser));
-      const wantProf = 'C:\\Users\\Bob Smith\\AppData\\Local\\Temp\\AetherOS-profile';
+      const wantProf = 'C:\\Users\\Bob Smith\\AppData\\Local\\Temp\\AE-profile';
       const joined = argv.join('|');
       check('a spaced path stays one argument',
-        argv[1] === '--app=file:///C:/Users/Bob Smith/AppData/Local/Temp/AetherOS.html',
+        argv[1] === '--app=file:///C:/Users/Bob Smith/AppData/Local/Temp/AE.html',
         argv[1]);
       check('the browser path is not split', argv[0] === browser, argv[0]);
       check('the private profile path survives a space',

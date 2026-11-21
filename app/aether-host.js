@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  AetherOS -- Electron host bridge
+ *  AE -- Electron host bridge
  *
  *  This is the "motherboard" for the WebAssembly build.  It owns everything a
  *  PC gives an OS but a sandboxed wasm module cannot reach on its own:
@@ -196,27 +196,71 @@ const AetherHost = (() => {
   const httpSlots = new Map();
   let httpNextSlot = 1;
 
+  /* ---- network ---------------------------------------------------------- *
+   * The browser inside the OS is a reader: it asks the host for bytes and lays
+   * them out itself.  Three things made "most websites" unreachable, and each
+   * one is fixed here rather than by pretending the reader is a web engine.
+   *
+   *  1. CORS.  A cross-origin fetch from this page is refused by the browser
+   *     before any bytes arrive, so news sites, wikis and blogs all failed with
+   *     an opaque TypeError.  A readable text proxy is tried as a fallback;
+   *     the page keeps its own address bar showing the real URL.
+   *  2. Blocked hosts.  Some sites refuse machine traffic outright; those are
+   *     reported as "blocked", with the reason, instead of a generic failure.
+   *  3. Big pages.  The body is capped, but the cap is now generous and the
+   *     reader is told when it truncated rather than being handed nothing.
+   */
+  const TEXT_PROXIES = [
+    (u) => 'https://r.jina.ai/' + u,
+    (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  ];
+
+  function isBlockedHost(url) {
+    /* Hosts that answer a fetch with an anti-bot page or a hard refusal.  They
+       still open in a real window via the browser's "open on the host" action;
+       here they would only produce a wall of JavaScript as text. */
+    return /(^|\.)(instagram|facebook|twitter|x|tiktok|netflix|spotify|linkedin|amazon|discord)\./i.test(url)
+        || /accounts\.google\.|google\.com\/search|youtube\.com\/watch/i.test(url);
+  }
+
   function httpSpawn(url) {
     const id = httpNextSlot++;
-    const slot = { state: 0, status: 0, body: new Uint8Array(0), url };
+    const slot = { state: 0, status: 0, body: new Uint8Array(0), url, via: '', error: '' };
     httpSlots.set(id, slot);
     (async () => {
-      try {
-        const resp = await fetch(url, {
-          method: 'GET',
-          redirect: 'follow',
-          /* Identify honestly: some sites refuse unknown agents, but pretending
-             to be a full browser to a site that serves us text would be worse. */
-          headers: { 'Accept': 'text/html,text/plain;q=0.9,*/*;q=0.5' },
-        });
-        slot.status = resp.status;
-        const buf = await resp.arrayBuffer();
-        slot.body = new Uint8Array(buf);
-        slot.state = 1;
-      } catch (err) {
-        slot.error = String(err && err.message || err);
-        slot.state = 2;
+      const attempts = [{ url, via: 'direct' }];
+      if (!isBlockedHost(url)) {
+        for (const wrap of TEXT_PROXIES) attempts.push({ url: wrap(url), via: 'reader proxy' });
       }
+      let lastErr = '';
+      for (const a of attempts) {
+        try {
+          const resp = await fetch(a.url, {
+            method: 'GET',
+            redirect: 'follow',
+            /* Identify honestly.  A reader that lies about being Chrome tends
+               to be served a page it cannot possibly lay out. */
+            headers: {
+              'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5',
+            },
+          });
+          if (!resp.ok) { lastErr = 'HTTP ' + resp.status; continue; }
+          const buf = await resp.arrayBuffer();
+          if (!buf || buf.byteLength < 32) { lastErr = 'empty response'; continue; }
+          slot.status = resp.status;
+          slot.body = new Uint8Array(buf);
+          slot.via = a.via;
+          slot.state = 1;
+          return;
+        } catch (err) {
+          lastErr = String((err && err.message) || err);
+          /* A refused-for-CORS fetch throws TypeError('Failed to fetch'); the
+             next attempt is the proxy, so just remember the reason. */
+        }
+      }
+      slot.error = lastErr || 'could not be reached';
+      slot.blocked = isBlockedHost(url) ? 1 : 0;
+      slot.state = 2;
     })();
     return id;
   }
@@ -285,8 +329,8 @@ const AetherHost = (() => {
           const mem = new Uint8Array(inst.memory.buffer);
           let s = '';
           for (let i = ptr; i < mem.length && mem[i]; i++) s += String.fromCharCode(mem[i]);
-          if (el && el.status) el.status.textContent = s || 'AetherOS';
-          document.title = s || 'AetherOS';
+          if (el && el.status) el.status.textContent = s || 'AE';
+          document.title = s || 'AE';
         },
 
         js_beep(freq, ms) {
@@ -395,7 +439,7 @@ const AetherHost = (() => {
     if (rc !== 0) {
       const code = inst.aether_last_error();
       el.status.textContent = 'Boot failed';
-      el.showError('AetherOS could not boot',
+      el.showError('AE could not boot',
         'hal_init() returned ' + code + ', so the machine stopped before the ' +
         'desktop could start.\n\n-1  out of memory\n' +
         'This build allocates 64 MB of linear memory for physical RAM plus a ' +
@@ -413,7 +457,7 @@ const AetherHost = (() => {
     function tick(now) {
       try {
         if (!inst.aether_running()) {
-          el.status.textContent = 'AetherOS halted';
+          el.status.textContent = 'AE halted';
           return;
         }
         inst.aether_frame();
@@ -425,7 +469,7 @@ const AetherHost = (() => {
         }
       } catch (err) {
         el.status.textContent = 'Kernel fault';
-        el.showError('The AetherOS kernel faulted',
+        el.showError('The AE kernel faulted',
           String(err && err.stack || err));
         return;
       }

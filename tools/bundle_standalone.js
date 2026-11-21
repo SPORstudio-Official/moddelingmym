@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* ==========================================================================
- *  Bundle AetherOS into ONE self-contained .html file.
+ *  Bundle AE into ONE self-contained .html file.
  *
  *  Why a single file: a browser refuses to fetch() a sibling .wasm over
  *  file://, so a normal build cannot run from a double-clicked page.  Embedding
@@ -8,7 +8,7 @@
  *  script removes every external reference.  The result is a page that runs the
  *  whole OS offline, with no server and nothing to install.
  *
- *  Output: dist/AetherOS.html  (~1.3 MB)
+ *  Output: dist/AE.html  (~1.3 MB)
  * ======================================================================== */
 'use strict';
 
@@ -17,7 +17,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const APP = path.join(ROOT, 'app');
-const OUT = path.join(ROOT, 'dist', 'AetherOS.html');
+const OUT = path.join(ROOT, 'dist', 'AE.html');
 
 const wasm = fs.readFileSync(path.join(APP, 'aether.wasm'));
 const css = fs.readFileSync(path.join(APP, 'style.css'), 'utf8');
@@ -53,8 +53,8 @@ const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>AetherOS</title>
-<!-- AetherOS ${require(path.join(ROOT, 'package.json')).version} -- single-file build.
+<title>AE</title>
+<!-- AE ${require(path.join(ROOT, 'package.json')).version} -- single-file build.
      The entire operating system (kernel, compositor, VFS, scheduler, compiler,
      apps) is embedded in this page as a WebAssembly module.  No network access,
      no installation, no dependencies. -->
@@ -65,11 +65,11 @@ ${css}
 <body>
   <div id="stage">
     <canvas id="screen" width="1280" height="720" tabindex="0"
-            aria-label="AetherOS screen"></canvas>
+            aria-label="AE screen"></canvas>
 
     <div id="overlay" class="hidden" role="alertdialog" aria-modal="true">
       <div class="panel">
-        <h1 id="err-title">AetherOS</h1>
+        <h1 id="err-title">AE</h1>
         <pre id="err-body"></pre>
         <p class="hint" id="err-hint"></p>
         <button id="err-close" autofocus>Close</button>
@@ -78,7 +78,7 @@ ${css}
   </div>
 
   <footer id="statusbar">
-    <span class="brand">AetherOS</span>
+    <span class="brand">AE</span>
     <span id="status">starting&hellip;</span>
     <span class="spacer"></span>
     <span id="fps" class="dim"></span>
@@ -108,8 +108,16 @@ for (const re of [/\bsrc\s*=\s*["'](?!#|data:)/g, /\bhref\s*=\s*["'](?!#|data:)/
   const m = html.match(re);
   if (m) external.push(...m);
 }
-if (html.includes('http://') || html.includes('https://')) {
-  external.push('absolute URL');
+/* Absolute URLs in *markup* would make the file depend on something outside
+   itself, so they are fatal.  An absolute URL inside a JavaScript string is a
+   different thing: the in-OS browser has a list of reader proxies it may call
+   at run time, and the OS window loading those is the whole point of a
+   browser.  So the scan looks at tag attributes and <script src>, not at
+   string literals. */
+{
+  const attr = /<[^>]+\b(?:src|href|action)\s*=\s*["']https?:/gi;
+  const m = html.match(attr);
+  if (m) external.push(...m);
 }
 if (external.length) {
   console.error('bundle: external references found: ' + external.join(', '));

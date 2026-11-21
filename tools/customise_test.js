@@ -121,7 +121,7 @@ function sigDiff(a, b) {
 }
 
 (async () => {
-  console.log('AetherOS customisation test\n');
+  console.log('AE customisation test\n');
 
   const ok = await sandbox.__H.start({
     canvas, status: { textContent: '' }, fps: { textContent: '' },

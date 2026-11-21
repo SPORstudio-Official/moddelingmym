@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  AetherOS -- shell bootstrap
+ *  AE -- shell bootstrap
  *
  *  Wires the page chrome (status strip, error overlay, fullscreen toggle) and
  *  hands control to AetherHost, which instantiates the kernel.

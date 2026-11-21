@@ -4,7 +4,7 @@
  *  The Windows loader does not call main() for a PE image; it calls whatever
  *  address the header names as the entry point, and normally that address is
  *  the C runtime's mainCRTStartup, which initialises the CRT, parses the
- *  command line and then calls main()/WinMain().  AetherOS does not use the C
+ *  command line and then calls main()/WinMain().  AE does not use the C
  *  runtime at all, so this file provides the equivalent of that prologue in a
  *  few dozen bytes: capture the process instance handle, run the kernel entry
  *  point declared in 95_main.c, and terminate with its exit code.

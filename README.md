@@ -1,19 +1,27 @@
-# AetherOS
+# AE — Architecture Environment
 
-A complete 32-bit hobby operating system — kernel, virtual file system, process
+A complete 32-bit operating system — kernel, virtual file system, process
 scheduler, bytecode VM, window manager, and GUI applications — that boots inside
-a single 337 KB Windows executable.
+a single Windows executable with its own icon and its own identity.
 
 The whole OS is a freestanding C11 program. It links **no C runtime**: string,
 memory, formatting, heap and floating-point routines are all implemented in the
 kernel itself, so the built executable imports nothing but four Win32 system
 libraries (`kernel32`, `user32`, `gdi32`, `winmm`).
 
+`dist/AE.exe` is the whole machine: a 10 KB **launcher** carrying the OS, plus a
+386 KB **resource section** holding the AE icon (16-256 px) and its version
+metadata. The launcher opens the OS in an app-mode window with its own
+AppUserModelID, its own profile in `%LOCALAPPDATA%\AE`, and no browser
+first-run, sync or "restore pages" prompts -- so Windows shows **AE**, in the
+taskbar, the Start menu and in search, not the engine underneath it.
+
 ## Build
 
 ```sh
 tools/setup_toolchain.sh     # fetches zig 0.17.1 into ~/.local/zig (once)
-tools/build.sh               # -> AetherOS.exe (Windows GUI app)
+tools/build_exe.sh           # -> dist/AE.exe (one file, own icon + metadata)
+tools/build.sh               # -> the 337 KB kernel-only Windows build
 tools/build.sh --headless    # -> Linux binary for CI/screenshot runs
 ```
 
@@ -40,13 +48,13 @@ The kernel is one translation unit assembled from ordered modules in `dev/`.
 | `dev/70_bytecode.c` | the `cc` C-subset compiler and stack-machine VM |
 | `dev/75_registry.c` | settings persistence |
 | `dev/80_wm.c` | window manager, compositor, taskbar, Start menu, toasts |
-| `dev/85_app_sh.c` | AetherShell (command interpreter, `cc`, `run`) |
+| `dev/85_app_sh.c` | Crommand (command interpreter, `cc`, `run`) |
 | `dev/86..93_app_*.c` | sysmon, explorer, editor, hexview, paint, settings, calc, console |
 | `dev/95_main.c` | boot sequence, panic handler, main loop |
 
 ## What it does
 
-- **AetherShell** -- command interpreter with `ls`, `cat`, `cp`, `mv`, `rm`,
+- **Crommand** -- command interpreter with `ls`, `cat`, `cp`, `mv`, `rm`,
   `stat`, `hexdump`, `df`, `free`, `ps`, `top`, `dmesg`, `uname`, `theme`, plus
   `cc`/`run` for the built-in compiler.
 - **`cc` + bytecode VM** -- compiles a C subset (functions, recursion, loops,
@@ -68,7 +76,7 @@ and a sandboxed wasm module cannot reach.
 
 ```sh
 npm install
-npm start          # builds aether.wasm, then opens the AetherOS window
+npm start          # builds aether.wasm, then opens the AE window
 ```
 
 `npm start` rebuilds the module every time, so the window can never run a stale
@@ -112,32 +120,32 @@ Win32 and headless chassis are unaffected.
 ### A standalone app, no install
 
 ```sh
-npm run exe        # -> dist/AetherOS.exe (Windows, single file, double-click)
-npm run app        # -> dist/AetherOS.html + launchers for every platform
+npm run exe        # -> dist/AE.exe (Windows, single file, double-click)
+npm run app        # -> dist/AE.html + launchers for every platform
 ```
 
-`dist/AetherOS.exe` is a real Windows executable, not a shortcut: a 10 KB native
+`dist/AE.exe` is a real Windows executable, not a shortcut: a 10 KB native
 launcher with the whole 1.4 MB machine appended to it as a payload. Double-click
-it and AetherOS opens in its own window. It needs no installer, no runtime, no
+it and AE opens in its own window. It needs no installer, no runtime, no
 Node, no Electron and no network. The launcher imports only `KERNEL32`,
 `ADVAPI32`, `SHELL32` and `USER32` -- it has no C runtime dependency, so it runs
 on any 64-bit Windows from 7 onward. On start it finds the `<!DOCTYPE html>`
-anchor, writes the payload to `%TEMP%\AetherOS.html`, and opens that file with
+anchor, writes the payload to `%TEMP%\AE.html`, and opens that file with
 its own private browser profile via a Chromium-family browser in `--app` mode;
 if no such browser exists it hands the file to the default browser instead, and
 every failure path shows a normal Windows message box rather than failing
 silently.
 
-`dist/AetherOS.html` is the whole machine in one 1.4 MB file: kernel,
+`dist/AE.html` is the whole machine in one 1.4 MB file: kernel,
 compositor, VFS, scheduler, C compiler, every app and the browser. Double-click
 it and it runs, offline. The generated launchers open it in a chrome-less app
 window so it feels like a program rather than a web page:
 
 | Platform | Launcher |
 | --- | --- |
-| Windows | `dist\AetherOS.exe` (double-click), or `dist\AetherOS.cmd` for the script version |
-| macOS | `dist/AetherOS.command` |
-| Linux | `dist/aether-os.sh`, or install `AetherOS.desktop` |
+| Windows | `dist\AE.exe` (double-click), or `dist\AE.cmd` for the script version |
+| macOS | `dist/AE.command` |
+| Linux | `dist/aether-os.sh`, or install `AE.desktop` |
 
 Electron (`npm start`) is still there for a true native window, but it needs a
 200 MB platform-specific download and, to distribute, code signing. For an OS
@@ -147,7 +155,7 @@ build.
 ### Customising it
 
 Everything is changeable from the Control Panel's Appearance tab or from
-AetherShell, and every change is written to `/etc/desktop.cfg` so it survives a
+Crommand, and every change is written to `/etc/desktop.cfg` so it survives a
 reboot:
 
 ```sh
@@ -165,7 +173,7 @@ Two extra wallpapers ship with this: **Aurora Drift** (procedural curtains) and
 **Solid Colour**, which fills the desktop with a colour of your choosing so the
 machine can be made to look like nothing else.
 
-### AetherBrowser
+### AE Browser
 
 A real browser, in the machine, with an address bar, history, back/forward,
 scrollable pages and clickable links. `browser` in the shell, or the globe icon.
@@ -182,7 +190,7 @@ Blocking the module's thread would have frozen the window for the length of the
 request, which is why `net_begin`/`net_poll`/`net_finish` exist alongside the
 simple `net_fetch` used during boot.
 
-Local pages (`aether://about`, `aether://files`, `aether://commands`) never
+Local pages (`ae://about`, `ae://files`, `ae://commands`) never
 touch the network. On the Win32 build, which has no network stack, the browser
 still runs and reports plainly that networking is unavailable.
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Build a standalone, double-clickable AetherOS application.
+# Build a standalone, double-clickable AE application.
 #
 #   ./tools/make_app.sh
 #
-# Produces a single self-contained AetherOS.html and, where the platform
+# Produces a single self-contained AE.html and, where the platform
 # supports it, a launcher that opens it in an app-style window (no tabs, no
 # address bar, no browser chrome).  Nothing needs to be installed: no Electron,
 # no Node, no network.
@@ -25,7 +25,7 @@ echo "==> building the WebAssembly image"
 echo "==> bundling into a single file"
 node tools/bundle_standalone.js
 
-OUT="$ROOT/dist/AetherOS.html"
+OUT="$ROOT/dist/AE.html"
 [ -f "$OUT" ] || { echo "bundle failed" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
@@ -35,13 +35,13 @@ OUT="$ROOT/dist/AetherOS.html"
 # Windows: a .cmd that opens the file in Edge/Chrome's app mode, which gives a
 # window with no tabs, no address bar and no menu -- indistinguishable from a
 # native app window for this purpose.
-cat > "$ROOT/dist/AetherOS.cmd" <<'WIN'
+cat > "$ROOT/dist/AE.cmd" <<'WIN'
 @echo off
-REM AetherOS -- open the single-file build in a chrome-less app window.
+REM AE -- open the single-file build in a chrome-less app window.
 setlocal
-set "APP=%~dp0AetherOS.html"
+set "APP=%~dp0AE.html"
 if not exist "%APP%" (
-  echo AetherOS.html is missing next to this launcher.
+  echo AE.html is missing next to this launcher.
   pause
   exit /b 1
 )
@@ -59,11 +59,11 @@ endlocal
 WIN
 
 # macOS: a double-clickable .command
-cat > "$ROOT/dist/AetherOS.command" <<'MAC'
+cat > "$ROOT/dist/AE.command" <<'MAC'
 #!/bin/bash
-# AetherOS -- open the single-file build in a chrome-less app window.
+# AE -- open the single-file build in a chrome-less app window.
 cd "$(dirname "$0")"
-APP="$PWD/AetherOS.html"
+APP="$PWD/AE.html"
 for b in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
          "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
          "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"; do
@@ -71,14 +71,14 @@ for b in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
 done
 open "$APP"     # Safari, full browser chrome, but it runs
 MAC
-chmod +x "$ROOT/dist/AetherOS.command"
+chmod +x "$ROOT/dist/AE.command"
 
 # Linux: a .desktop entry plus a launcher script.
 cat > "$ROOT/dist/aether-os.sh" <<'LNX'
 #!/bin/bash
-# AetherOS -- open the single-file build in a chrome-less app window.
+# AE -- open the single-file build in a chrome-less app window.
 cd "$(dirname "$0")"
-APP="$PWD/AetherOS.html"
+APP="$PWD/AE.html"
 for b in google-chrome chromium chromium-browser microsoft-edge brave-browser; do
   if command -v "$b" >/dev/null 2>&1; then
     exec "$b" --app="file://$APP" --window-size=1320,800
@@ -88,10 +88,10 @@ xdg-open "$APP"
 LNX
 chmod +x "$ROOT/dist/aether-os.sh"
 
-cat > "$ROOT/dist/AetherOS.desktop" <<'DSK'
+cat > "$ROOT/dist/AE.desktop" <<'DSK'
 [Desktop Entry]
 Type=Application
-Name=AetherOS
+Name=AE
 Comment=An operating system that boots inside a window
 Exec=sh -c 'cd "$(dirname "%k")" 2>/dev/null; ./aether-os.sh'
 Icon=applications-system
@@ -104,14 +104,14 @@ DSK
 # ---------------------------------------------------------------------------
 echo
 echo "standalone app ready:"
-for f in AetherOS.html AetherOS.cmd AetherOS.command aether-os.sh AetherOS.desktop; do
+for f in AE.html AE.cmd AE.command aether-os.sh AE.desktop; do
   if [ -f "$ROOT/dist/$f" ]; then
     printf '  %-20s %8s bytes\n' "dist/$f" "$(stat -c%s "$ROOT/dist/$f")"
   fi
 done
 echo
-echo "  Windows : double-click dist\\AetherOS.cmd"
-echo "  macOS   : double-click dist/AetherOS.command"
-echo "  Linux   : run dist/aether-os.sh   (or install AetherOS.desktop)"
+echo "  Windows : double-click dist\\AE.cmd"
+echo "  macOS   : double-click dist/AE.command"
+echo "  Linux   : run dist/aether-os.sh   (or install AE.desktop)"
 echo
 echo "  The .html alone also works: double-click it in any browser."

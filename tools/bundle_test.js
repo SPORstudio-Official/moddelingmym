@@ -1,7 +1,7 @@
 /* ==========================================================================
  *  Single-file bundle test
  *
- *  Loads dist/AetherOS.html the way a browser would -- parses out its <script>
+ *  Loads dist/AE.html the way a browser would -- parses out its <script>
  *  blocks, runs them against a fake DOM -- and proves that:
  *
  *    1. it declares no external reference at all (it must work from file://);
@@ -17,7 +17,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
-const FILE = path.join(ROOT, 'dist', 'AetherOS.html');
+const FILE = path.join(ROOT, 'dist', 'AE.html');
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -26,12 +26,12 @@ function check(name, cond, detail) {
 }
 
 if (!fs.existsSync(FILE)) {
-  console.error('dist/AetherOS.html missing -- run: node tools/bundle_standalone.js');
+  console.error('dist/AE.html missing -- run: node tools/bundle_standalone.js');
   process.exit(1);
 }
 
 const html = fs.readFileSync(FILE, 'utf8');
-console.log('AetherOS single-file test\n');
+console.log('AE single-file test\n');
 
 /* ---- 1. self-containment ---------------------------------------------- */
 const bare = html
@@ -132,7 +132,7 @@ sandbox.addEventListener = (t, f) => {
 sandbox.fetch = undefined;
 
 vm.createContext(sandbox);
-for (const s of scripts) vm.runInContext(s, sandbox, { filename: 'AetherOS.html' });
+for (const s of scripts) vm.runInContext(s, sandbox, { filename: 'AE.html' });
 
 function fire(target, type, ev) {
   for (const f of listeners.get(target._name + ':' + type) || []) {

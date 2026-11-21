@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  HTML -- a small document renderer for the AetherBrowser
+ *  HTML -- a small document renderer for the AE Browser
  *
  *  This is not a web engine.  It reads a fetched HTML document, throws away
  *  everything that is not content (scripts, styles, comments, head), and lays

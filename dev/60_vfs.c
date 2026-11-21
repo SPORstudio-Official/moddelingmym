@@ -855,10 +855,10 @@ static void seed_vfs(void) {
     vfs_mkdir_path("/var/log");
 
     vfs_write_string("/boot/kernel.sys",
-        "AetherOS kernel image\n"
+        "AE kernel image\n"
         "arch: x86 (32-bit protected mode, emulated)\n"
-        "version: " AETHER_VERSION_STR "\n"
-        "codename: " AETHER_CODENAME "\n"
+        "version: " AE_VERSION_STR "\n"
+        "codename: " AE_CODENAME "\n"
         "text: 0x00010000  data: 0x00040000  bss: 0x00060000\n"
         "symbols: 1241  syscalls: 16  loadable modules: 0\n");
     vfs_write_string("/boot/config.sys",
@@ -871,7 +871,7 @@ static void seed_vfs(void) {
         " / _ \\ | || | | __|| || || _ \\/ __|\n"
         "| |_| || __ || _| | __ ||   /\\__ \\\n"
         " \\___/ |_||_||___||_||_||_|_\\|___/\n\n"
-        "Welcome to AetherOS " AETHER_VERSION_STR " (" AETHER_CODENAME ").\n"
+        "Welcome to AE " AE_VERSION_STR " (" AE_CODENAME ").\n"
         "Type 'help' for the command list, 'apps' for programs.\n");
     vfs_write_string("/etc/theme.cfg",
         "wallpaper = nebula\nscanlines = off\naccent = #4FC3F7\n"
@@ -886,7 +886,7 @@ static void seed_vfs(void) {
 
     /* "binaries": real bytecode images are written by the compiler; these are
        the built-in app descriptors the shell knows how to spawn. */
-    vfs_write_string("/bin/sh",     "#!aether-app terminal\nname=AetherShell\n");
+    vfs_write_string("/bin/sh",     "#!aether-app terminal\nname=Crommand\n");
     vfs_write_string("/bin/ls",     "#!aether-app builtin\nname=ls\n");
     vfs_write_string("/bin/cat",    "#!aether-app builtin\nname=cat\n");
     vfs_write_string("/bin/cc",     "#!aether-app builtin\nname=cc\ncompiler=bytecode-v1\n");
@@ -899,7 +899,7 @@ static void seed_vfs(void) {
     vfs_write_string("/bin/settings","#!aether-app window\nname=settings\n");
 
     vfs_write_string("/home/user/readme.txt",
-        "AetherOS user notes\n"
+        "AE user notes\n"
         "==================\n\n"
         "1. You are running on a kernel written in this very executable.\n"
         "2. /proc is virtual: the files are rebuilt from live kernel state.\n"
@@ -908,9 +908,9 @@ static void seed_vfs(void) {
         "5. Everything - fonts, icons, wallpaper - is generated in software.\n");
 
     vfs_write_string("/home/user/hello.c",
-        "// hello.c -- your first AetherOS program\n"
+        "// hello.c -- your first AE program\n"
         "func main() {\n"
-        "    print(\"Hello, AetherOS world!\\n\");\n"
+        "    print(\"Hello, AE world!\\n\");\n"
         "    var i = 0;\n"
         "    while (i < 5) {\n"
         "        print(\"tick \", i, \"\\n\");\n"
@@ -943,7 +943,7 @@ static void seed_vfs(void) {
         "[ ] port the paint app to the second monitor\n");
 
     vfs_write_string("/home/user/docs/manual.txt",
-        "AetherOS manual (excerpt)\n"
+        "AE manual (excerpt)\n"
         "-------------------------\n"
         "syscalls : exit spawn kill getpid sleep malloc free open read\n"
         "           write close mkdir unlink stat ipc_send ipc_recv\n"
@@ -953,23 +953,23 @@ static void seed_vfs(void) {
     vfs_write_string("/var/log/boot.log", "boot log is available via dmesg\n");
 
     /* ----------------------------------------------------------------------
-     * /home/user/Ae64 -- the system reference shelf.
+     * /home/user/AE64 -- the system reference shelf.
      *
-     * Everything an AetherOS user needs to operate and customise the machine
+     * Everything an AE user needs to operate and customise the machine
      * in one place, findable from the file manager rather than only from a
      * shell command they would have to know.  Every file below documents
      * behaviour that actually exists in this build; nothing here is aspirational.
      * -------------------------------------------------------------------- */
-    vfs_mkdir_path("/home/user/Ae64");
+    vfs_mkdir_path("/home/user/AE64");
 
-    vfs_write_string("/home/user/Ae64/README.txt",
-        "Ae64 -- the AetherOS reference shelf\n"
+    vfs_write_string("/home/user/AE64/README.txt",
+        "AE64 -- the AE reference shelf\n"
         "===================================\n\n"
         "This folder holds the system's own documentation. It is written for the\n"
         "version you are running right now, so the commands and paths in it work.\n\n"
         "  keyboard.txt     every shortcut the desktop and apps respond to\n"
         "  desktop.txt      right-click menus and what each entry does\n"
-        "  shell.txt        the full AetherShell command reference\n"
+        "  shell.txt        the full Crommand command reference\n"
         "  customize.txt    themes, wallpapers, fonts, accents, saved settings\n"
         "  browser.txt      how the browser works, and what it cannot do\n"
         "  filesystem.txt   the layout of the virtual file system\n"
@@ -978,10 +978,10 @@ static void seed_vfs(void) {
         "  license.txt      MIT licence for the kernel and the documentation\n"
         "  version.txt      version, codename and build details\n\n"
         "Open any of them with Code Studio (double-click in the file manager) or\n"
-        "read them in the shell: cat /home/user/Ae64/keyboard.txt\n");
+        "read them in the shell: cat /home/user/AE64/keyboard.txt\n");
 
-    vfs_write_string("/home/user/Ae64/keyboard.txt",
-        "AetherOS keyboard reference\n"
+    vfs_write_string("/home/user/AE64/keyboard.txt",
+        "AE keyboard reference\n"
         "===========================\n\n"
         "DESKTOP\n"
         "  T                open a terminal (nothing focused)\n"
@@ -1034,8 +1034,8 @@ static void seed_vfs(void) {
         "  F4               deliberately panic the kernel (a demo of the crash\n"
         "                   handler; the kernel logs it and shows a debug screen)\n");
 
-    vfs_write_string("/home/user/Ae64/desktop.txt",
-        "The AetherOS desktop\n"
+    vfs_write_string("/home/user/AE64/desktop.txt",
+        "The AE desktop\n"
         "====================\n\n"
         "RIGHT-CLICK MENUS\n"
         "Right-click anywhere and you get a menu for whatever is under the pointer:\n"
@@ -1045,7 +1045,7 @@ static void seed_vfs(void) {
         "  Appearance...      opens the Control Panel on its Appearance tab\n"
         "  System monitor     live CPU, memory and process view\n"
         "  Shell reference    the command list, in the browser\n"
-        "  About AetherOS     version and codename\n\n"
+        "  About AE     version and codename\n\n"
         "On a desktop icon:\n"
         "  Open               same as double-clicking it\n"
         "  Appearance...      Control Panel\n"
@@ -1073,10 +1073,10 @@ static void seed_vfs(void) {
         "  Short messages appear above the taskbar and fade on their own. They are\n"
         "  how the system reports things like a failed browser request.\n");
 
-    vfs_write_string("/home/user/Ae64/shell.txt",
-        "AetherShell command reference\n"
+    vfs_write_string("/home/user/AE64/shell.txt",
+        "Crommand command reference\n"
         "=============================\n\n"
-        "Open AetherShell from the Start menu, the desktop icon, or by pressing T\n"
+        "Open Crommand from the Start menu, the desktop icon, or by pressing T\n"
         "when nothing is focused.\n\n"
         "FILES\n"
         "  ls [-l] [path]     list a directory (-l for detail including size)\n"
@@ -1133,14 +1133,26 @@ static void seed_vfs(void) {
         "  reboot             restart the kernel\n"
         "  logout             close the session\n"
         "  crash              trigger the panic handler (for testing)\n"
+        "\n"
+        "CROMMAND'S OWN\n"
+        "  These exist because this machine has a kernel, a compositor and a\n"
+        "  compiler inside it that it can interrogate -- not to fill a list.\n"
+        "  peek <file> [n]    the first n lines of a file (1 = one line, 0 = all)\n"
+        "  grep <pattern> <f> lines containing a word, with line numbers\n"
+        "  where <name>       every path whose name starts with <name>\n"
+        "  biggest [path]     the eight largest files, biggest first\n"
+        "  since              what this session has done, in numbers\n"
+        "  bench              time the heap, the maths and the VFS here\n"
+        "  grab [file]        save the screen as a PPM picture\n"
+        "  note [text]        a scratchpad in /home/user/notes.txt\n"
         "  web [url]          open the browser, optionally at a URL\n"
         "  help               this list, in the shell\n");
 
-    vfs_write_string("/home/user/Ae64/customize.txt",
-        "Customising AetherOS\n"
+    vfs_write_string("/home/user/AE64/customize.txt",
+        "Customising AE\n"
         "====================\n\n"
         "Everything below can be changed from the Control Panel's Appearance tab,\n"
-        "from AetherShell, or by editing /etc/desktop.cfg directly. Changes are\n"
+        "from Crommand, or by editing /etc/desktop.cfg directly. Changes are\n"
         "written to that file immediately, so they survive a reboot.\n\n"
         "THEMES  (theme 0-3)\n"
         "  0  Nebula      deep blue, the default\n"
@@ -1174,8 +1186,8 @@ static void seed_vfs(void) {
         "  resetprefs, or Appearance -> Reset in the Control Panel, restores the\n"
         "  defaults: Nebula theme, Deep Space wallpaper, cyan accent, normal font.\n");
 
-    vfs_write_string("/home/user/Ae64/browser.txt",
-        "AetherBrowser\n"
+    vfs_write_string("/home/user/AE64/browser.txt",
+        "AE Browser\n"
         "=============\n\n"
         "The browser is a reader, not a rendering engine, and it is honest about\n"
         "that. It fetches a page over HTTP, discards scripts, styles and images,\n"
@@ -1201,14 +1213,14 @@ static void seed_vfs(void) {
         "  - Requests time out after 25 seconds with a clear message.\n"
         "  - Redirects are followed by the host process, not the browser.\n\n"
         "OFFLINE PAGES\n"
-        "  aether://        the start page\n"
-        "  aether://about   machine details\n"
-        "  aether://files   the file system layout\n"
-        "  aether://commands the shell reference\n"
-        "  aether://keys    the keyboard reference\n");
+        "  ae://        the start page\n"
+        "  ae://about   machine details\n"
+        "  ae://files   the file system layout\n"
+        "  ae://commands the shell reference\n"
+        "  ae://keys    the keyboard reference\n");
 
-    vfs_write_string("/home/user/Ae64/filesystem.txt",
-        "The AetherOS file system\n"
+    vfs_write_string("/home/user/AE64/filesystem.txt",
+        "The AE file system\n"
         "=======================\n\n"
         "A 32 MB ramdisk formatted with a small inode-based file system (magic\n"
         "A7~OS), 512 inodes and 4096 blocks of 4 KB. It is created on first boot\n"
@@ -1228,20 +1240,32 @@ static void seed_vfs(void) {
         "  /home/user       your files\n"
         "    readme.txt, hello.c, fibonacci.c, todo.txt\n"
         "    docs/manual.txt\n"
-        "    Ae64/          this documentation\n"
+        "    AE64/          this documentation\n"
         "  /tmp             scratch space\n"
         "  /var/log         logs, including boot.log and any panic log\n\n"
         "USING IT\n"
         "  Open the Files icon, or press F when nothing is focused. Double-click a\n"
-        "  folder to enter it, a text file to open it in Code Studio. The toolbar\n"
-        "  has up, new file, new folder, delete, and a grid/list switch.\n"
+        "  folder to enter it, a text file to open it in Code Studio.\n\n"
+        "MANAGING FILES IN FILES\n"
+        "  Files is a file manager, not a viewer. Everything below works and every\n"
+        "  action reports what it did in the status bar.\n"
+        "    File / Folder    create one, with a name you type in the toolbar\n"
+        "    Rename           select an item, press Rename (or F2, or Ctrl+R)\n"
+        "    Copy / Cut       put the selection on the internal clipboard\n"
+        "    Paste            copy or move it into the folder you are looking at\n"
+        "    Delete           Delete key or the Delete action\n"
+        "  Shortcuts: Ctrl+N new file, Ctrl+D new folder, Ctrl+C copy,\n"
+        "  Ctrl+X cut, Ctrl+V paste, Ctrl+R rename, Ctrl+I properties,\n"
+        "  Delete removes, Enter opens, Backspace goes up, Tab switches view.\n"
+        "  Pasting into the same folder duplicates the item as \"name copy\".\n"
+        "  Folders copy recursively; a cut folder is moved, not copied.\n"
         "  In the shell: ls, cd, cat, mkdir, cp, mv, unlink, stat, df, tree.\n\n"
         "VIRTUAL FILES\n"
         "  Anything under /proc is generated when you read it; there is no storage\n"
         "  behind it. /dev entries are devices rather than files.\n");
 
-    vfs_write_string("/home/user/Ae64/system.txt",
-        "AetherOS system information\n"
+    vfs_write_string("/home/user/AE64/system.txt",
+        "AE system information\n"
         "===========================\n\n"
         "The machine this runs on is emulated in software and shares the process\n"
         "with the desktop. There is no virtualisation and no hypervisor: the\n"
@@ -1272,8 +1296,8 @@ static void seed_vfs(void) {
         "  a backtrace of recent kernel log lines, and the options to reboot (R),\n"
         "  dump the log to /var/log/panic.log (D) or continue (Esc).\n");
 
-    vfs_write_string("/home/user/Ae64/shortcuts.cfg",
-        "# AetherOS key bindings -- default set, for reference and editing.\n"
+    vfs_write_string("/home/user/AE64/shortcuts.cfg",
+        "# AE key bindings -- default set, for reference and editing.\n"
         "# Format: scope = chord -> action\n"
         "# Chords use Alt, Ctrl and Shift; a lone key is written plainly.\n"
         "\n"
@@ -1309,7 +1333,7 @@ static void seed_vfs(void) {
         "Ctrl+`           = toggle scanlines\n"
         "F4               = deliberate panic (demo)\n");
 
-    vfs_write_string("/home/user/Ae64/license.txt",
+    vfs_write_string("/home/user/AE64/license.txt",
         "MIT License\n"
         "===========\n\n"
         "Copyright (c) 2025 SPORstudio\n\n"
@@ -1329,11 +1353,11 @@ static void seed_vfs(void) {
         "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\n"
         "THE SOFTWARE.\n");
 
-    vfs_write_string("/home/user/Ae64/version.txt",
-        "AetherOS version information\n"
+    vfs_write_string("/home/user/AE64/version.txt",
+        "AE version information\n"
         "============================\n\n"
-        "  version   " AETHER_VERSION_STR "\n"
-        "  codename  " AETHER_CODENAME "\n"
+        "  version   " AE_VERSION_STR "\n"
+        "  codename  " AE_CODENAME "\n"
         "  arch      x86 (32-bit protected mode, emulated in software)\n"
         "  display   1280x720x32 linear framebuffer\n"
         "  ram       64 MB total, 31 MB heap, 32 MB ramdisk\n"

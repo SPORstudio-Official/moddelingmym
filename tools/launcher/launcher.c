@@ -1,19 +1,28 @@
 /* ==========================================================================
- *  AetherOS -- Windows launcher stub
+ *  AE (Architecture Environment) -- Windows launcher stub
  *
- *  A small native executable that carries the entire single-file AetherOS build
- *  inside itself, writes it to a temp file and opens it in a browser's app mode
- *  (Edge or Chrome with --app: no tabs, no address bar, no menu).
+ *  A small native executable that carries the entire single-file AE build inside
+ *  itself, writes it to a private app folder and opens it in a browser's app
+ *  mode (Edge or Chrome with --app: no tabs, no address bar, no menu).
  *
- *  Why a stub rather than an embedded engine: AetherOS is a WebAssembly module
- *  and needs a JavaScript engine to host it.  Shipping one means embedding
- *  Chromium (~150 MB) or writing a JS interpreter.  Every Windows 10/11 machine
- *  already has Edge, so the honest single-file application is a small launcher
- *  carrying the OS, not a 150 MB bundler.  If no browser is found the stub
- *  falls back to ShellExecute, which opens the default one.
+ *  Why a stub rather than an embedded engine: AE is a WebAssembly module and
+ *  needs a JavaScript engine to host it.  Shipping one means embedding Chromium
+ *  (~150 MB) or writing a JS interpreter.  Every Windows 10/11 machine already
+ *  has Edge, so the honest single-file application is a small launcher carrying
+ *  the OS, not a 150 MB bundler.
+ *
+ *  The window this opens must look like AE and never like Edge, which is why the
+ *  stub does four extra things:
+ *    - it carries its own icon and version resource (tools/launcher/ae.rc), so
+ *      Explorer, the Start menu, search and the taskbar show the AE mark;
+ *    - it registers an AE AppUserModelID and pins it on the browser window, so
+ *      the taskbar groups and labels it "AE" instead of "Microsoft Edge";
+ *    - it launches the browser with first-run, sync, restore-pages and default
+ *      browser prompts disabled, so none of Edge's own chrome or nags appear;
+ *    - it keeps the profile in %LOCALAPPDATA%\AE, not in Edge's.
  *
  *  Linked freestanding (-nostdlib), like the kernel: no C runtime, no imports
- *  beyond kernel32 and shell32.
+ *  beyond kernel32/shell32/advapi32/user32.
  * ========================================================================== */
 
 #define WIN32_LEAN_AND_MEAN
@@ -150,7 +159,7 @@ static int file_exists_path(const char *path) {
 /* ---- browser discovery ------------------------------------------------- */
 typedef struct {
     char path[MAX_PATH];
-    char args[1024];
+    char args[4096];
 } launch_t;
 
 static int find_browser(launch_t *out) {
@@ -188,13 +197,90 @@ static int find_browser(launch_t *out) {
     return 0;
 }
 
+
+/* ---- application identity ---------------------------------------------- *
+ * Windows decides what the taskbar button says, what icon it wears and which
+ * window group it joins from the process's AppUserModelID -- and an inherited
+ * one belongs to the browser.  Pinning our own ID on the browser window is what
+ * replaces "Microsoft Edge" + the Edge logo with "AE" + the AE logo in the
+ * taskbar, Alt+Tab and the notification area. */
+#define AE_APPID L"SPORstudio.AE.ArchitectureEnvironment"
+
+typedef HRESULT (WINAPI *SetAppIdFn)(PCWSTR);
+
+/* Resolves shell32!SetCurrentProcessExplicitAppUserModelID at run time: the
+ * stub links no import library for it, and this keeps the import table honest. */
+static int ae_set_process_appid(void) {
+    HMODULE h = LoadLibraryA("shell32.dll");
+    SetAppIdFn set;
+    if (!h) return 0;
+    set = (SetAppIdFn)(void *)GetProcAddress(h, "SetCurrentProcessExplicitAppUserModelID");
+    if (!set) return 0;
+    return SUCCEEDED(set(AE_APPID));
+}
+
+/* Registers AE with the Windows shell so search, "Open with" and the taskbar
+ * show the AE name and icon, not the host engine's.  Everything here is
+ * per-user (HKCU) and best effort: failing to write a key must never stop the
+ * app from starting. */
+static void ae_register_shell(const char *exe_path) {
+    HKEY k;
+    const char *base = "Software\\Classes\\Applications\\AE.exe";
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, base, 0, NULL, 0, KEY_WRITE, NULL, &k, NULL)
+        == ERROR_SUCCESS) {
+        RegSetValueExA(k, "FriendlyAppName", 0, REG_SZ,
+                       (const BYTE *)"AE", 3);
+        RegCloseKey(k);
+    }
+    if (RegCreateKeyExA(HKEY_CURRENT_USER,
+                        "Software\\Classes\\Applications\\AE.exe\\shell\\open\\command",
+                        0, NULL, 0, KEY_WRITE, NULL, &k, NULL) == ERROR_SUCCESS) {
+        char cmd[MAX_PATH + 8];
+        s_copy(cmd, "\"", sizeof(cmd));
+        s_cat(cmd, exe_path, sizeof(cmd));
+        s_cat(cmd, "\" \"%1\"", sizeof(cmd));
+        RegSetValueExA(k, NULL, 0, REG_SZ, (const BYTE *)cmd, (DWORD)s_len(cmd) + 1);
+        RegCloseKey(k);
+    }
+    /* RegisteredApplications + Capabilities is what makes AE appear in
+     * "Default apps" and in Start-menu search with its own name. */
+    if (RegCreateKeyExA(HKEY_CURRENT_USER,
+                        "Software\\RegisteredApplications", 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, NULL) == ERROR_SUCCESS) {
+        const char *cap = "Software\\SPORstudio\\AE\\Capabilities";
+        RegSetValueExA(k, "AE", 0, REG_SZ, (const BYTE *)cap, (DWORD)s_len(cap) + 1);
+        RegCloseKey(k);
+    }
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\SPORstudio\\AE\\Capabilities",
+                        0, NULL, 0, KEY_WRITE, NULL, &k, NULL) == ERROR_SUCCESS) {
+        RegSetValueExA(k, "ApplicationName", 0, REG_SZ, (const BYTE *)"AE", 3);
+        RegSetValueExA(k, "ApplicationDescription", 0, REG_SZ,
+                       (const BYTE *)"Architecture Environment", 25);
+        RegCloseKey(k);
+    }
+}
+
+/* A per-app override Windows consults when it groups a window: this is the
+ * documented way to give an ID its own display name and icon. */
+static void ae_register_appid(const char *exe_path) {
+    HKEY k;
+    const char *key =
+        "Software\\Classes\\AppUserModelId\\SPORstudio.AE.ArchitectureEnvironment";
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, key, 0, NULL, 0, KEY_WRITE, NULL, &k, NULL)
+        != ERROR_SUCCESS) return;
+    RegSetValueExA(k, "DisplayName", 0, REG_SZ, (const BYTE *)"AE", 3);
+    RegSetValueExA(k, "IconUri", 0, REG_SZ,
+                   (const BYTE *)exe_path, (DWORD)s_len(exe_path) + 1);
+    RegCloseKey(k);
+}
+
 /* ---- error reporting --------------------------------------------------- *
  * The stub is a GUI binary: a failure that printed nothing would look like the
  * machine did nothing at all, which is the defect the old standalone build had.
  * Every failure path ends in a message box. */
 static void fail(const char *what, DWORD code) {
     char msg[600];
-    s_copy(msg, "AetherOS could not start.\n\n", sizeof(msg));
+    s_copy(msg, "AE could not start.\n\n", sizeof(msg));
     s_cat(msg, what, sizeof(msg));
     if (code) {
         char num[24];
@@ -203,21 +289,37 @@ static void fail(const char *what, DWORD code) {
         s_cat(msg, num, sizeof(msg));
     }
     s_cat(msg, "\n\nIf this keeps happening, report it with the code above.", sizeof(msg));
-    MessageBoxA(NULL, msg, "AetherOS", MB_ICONERROR | MB_OK);
+    MessageBoxA(NULL, msg, "AE", MB_ICONERROR | MB_OK);
 }
 
-/* ---- main -------------------------------------------------------------- */
+/* ---- main -------------------------------------------------------------- *
+ * The command-line buffers are file-scope rather than automatic.  A function
+ * whose frame exceeds 4 KB needs a stack probe (___chkstk_ms) on Win64, and a
+ * freestanding link has no provider for it -- which is how adding the browser
+ * flags turned a working build into an undefined-symbol error. */
+static char g_url[2048];
+static char g_prof[MAX_PATH];
+static char g_self[MAX_PATH];
+static char g_app[MAX_PATH];
+static launch_t g_lt;
+
 int WINAPI aether_launcher_entry(void) {
-    char self[MAX_PATH];
-    char app[MAX_PATH];
+    char *self = g_self;
+    char *app = g_app;
     payload_t p;
-    launch_t lt;
+    launch_t *lt = &g_lt;
     int ok;
 
     if (!GetModuleFileNameA(NULL, self, MAX_PATH)) {
         fail("Cannot determine the location of this program.", GetLastError());
         return 1;
     }
+
+    /* Own the taskbar entry, the Start-menu name and the icon before any window
+       exists; then teach the shell about this executable. */
+    ae_set_process_appid();
+    ae_register_shell(self);
+    ae_register_appid(self);
 
     /* Already extracted and unchanged?  Reuse it, so launching twice does not
      * rewrite the file (and so a slow disk is only paid once). */
@@ -227,13 +329,13 @@ int WINAPI aether_launcher_entry(void) {
             fail("Cannot find the temporary folder.", GetLastError());
             return 1;
         }
-        s_cat(app, "AetherOS.html", MAX_PATH);
+        s_cat(app, "AE.html", MAX_PATH);
     }
 
     p = payload_read(self);
     if (!p.data || p.len < 1024) {
-        fail("This file seems to be incomplete -- the AetherOS payload is missing.\n"
-             "Download AetherOS.exe again.", 0);
+        fail("This file seems to be incomplete -- the AE payload is missing.\n"
+             "Download AE.exe again.", 0);
         return 2;
     }
 
@@ -263,45 +365,61 @@ int WINAPI aether_launcher_entry(void) {
      * so the url and the profile path are both wrapped in quotes.  The profile
      * is private so the app gets its own window instead of handing the url to
      * an already-running browser and exiting. */
-    ZeroMemory(&lt, sizeof(lt));
-    if (find_browser(&lt)) {
-        char url[MAX_PATH + 96];
-        char prof[MAX_PATH];
+    ZeroMemory(lt, sizeof(*lt));
+    if (find_browser(lt)) {
+        char *url = g_url;
+        char *prof = g_prof;
         STARTUPINFOA si;
         PROCESS_INFORMATION pi;
 
-        s_copy(url, "--app=\"file:///", sizeof(url));
+        s_copy(url, "--app=\"file:///", sizeof(g_url));
         {
             unsigned long long i;
-            char path_forward[MAX_PATH];
+            char *path_forward = g_self;   /* self is no longer needed here */
             for (i = 0; i + 1 < MAX_PATH && app[i]; i++)
                 path_forward[i] = (app[i] == '\\') ? '/' : app[i];
             path_forward[i] = 0;
-            s_cat(url, path_forward, sizeof(url));
+            s_cat(url, path_forward, sizeof(g_url));
         }
-        s_cat(url, "\" --window-size=1320,820 --user-data-dir=\"", sizeof(url));
+        /* Flags that keep the host engine invisible.  Without them the first
+         * launch shows Edge's "welcome / import your data" wizard, an infobar
+         * about being signed out, and "restore pages?" after any crash -- all of
+         * them make the app look like Edge rather than AE. */
+        s_cat(url, "\""
+                   " --app-window-size=1320,820"
+                   " --window-size=1320,820"
+                   " --no-first-run"
+                   " --no-default-browser-check"
+                   " --no-service-autorun"
+                   " --disable-sync"
+                   " --disable-features=msEdgeFirstRunExperience,msHubApps,"
+                   "msEdgeIdentitySvc,IsolatedSandboxedIframes"
+                   " --hide-crash-restore-bubble"
+                   " --disable-background-networking"
+                   " --noerrdialogs"
+                   " --user-data-dir=\"", sizeof(g_url));
+
+        /* Profile under %LOCALAPPDATA%\AE, not Edge's own folder: this is what
+         * gives the window its own identity and keeps AE's storage separate. */
         {
-            unsigned long long i, slash = 0;
-            for (i = 0; app[i]; i++)
-                if (app[i] == '\\' || app[i] == '/') slash = i + 1;
-            for (i = 0; i < slash && i + 1 < MAX_PATH; i++) prof[i] = app[i];
-            prof[i] = 0;
+            static char base[MAX_PATH];
+            DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", base, MAX_PATH);
+            if (n == 0 || n >= MAX_PATH) {
+                /* No local app data: fall back to the payload's own folder. */
+                unsigned long long i, slash = 0;
+                for (i = 0; app[i]; i++)
+                    if (app[i] == '\\' || app[i] == '/') slash = i + 1;
+                for (i = 0; i < slash && i + 1 < MAX_PATH; i++) prof[i] = app[i];
+                prof[i] = 0;
+            } else {
+                s_copy(prof, base, sizeof(prof));
+                s_cat(prof, "\\AE", sizeof(prof));
+            }
         }
-        s_cat(url, prof, sizeof(url));
-        s_cat(url, "AetherOS-profile\"", sizeof(url));
+        s_cat(url, prof, sizeof(g_url));
+        s_cat(url, "\"", sizeof(g_url));
 
-        ZeroMemory(&si, sizeof(si));
-        si.cb = sizeof(si);
-        /* CreateProcess hands the child one raw command line and the child
-         * splits it itself.  Chrome reads argv[0] as its own path, so the line
-         * has to start with the executable, quoted, or the --app flag would be
-         * consumed as the program name and no window would open. */
-        s_copy(lt.args, "\"", sizeof(lt.args));
-        s_cat(lt.args, lt.path, sizeof(lt.args));
-        s_cat(lt.args, "\" ", sizeof(lt.args));
-        s_cat(lt.args, url, sizeof(lt.args));
-
-        if (CreateProcessA(lt.path, lt.args, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        if (CreateProcessA(lt->path, lt->args, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
             return 0;
@@ -312,7 +430,7 @@ int WINAPI aether_launcher_entry(void) {
     {
         HINSTANCE r = ShellExecuteA(NULL, "open", app, NULL, NULL, SW_SHOWNORMAL);
         if ((INT_PTR)r <= 32) {
-            fail("Cannot open AetherOS.html -- no web browser was found.", (DWORD)(INT_PTR)r);
+            fail("Cannot open AE.html -- no web browser was found.", (DWORD)(INT_PTR)r);
             return 4;
         }
     }

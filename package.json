@@ -1,7 +1,7 @@
 {
   "name": "aetheros",
   "version": "1.0.0",
-  "description": "AetherOS -- a complete 32-bit operating system that boots inside a single desktop window",
+  "description": "AE -- a complete 32-bit operating system that boots inside a single desktop window",
   "main": "electron/main.js",
   "private": true,
   "author": "SPORstudio",
@@ -26,7 +26,7 @@
   },
   "build": {
     "appId": "studio.spor.aetheros",
-    "productName": "AetherOS",
+    "productName": "AE",
     "files": [
       "electron/**/*",
       "app/index.html",
@@ -46,7 +46,7 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
-      "shortcutName": "AetherOS"
+      "shortcutName": "AE"
     },
     "mac": {
       "target": "dmg",

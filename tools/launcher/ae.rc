@@ -1,0 +1,47 @@
+/* ==========================================================================
+ *  AE (Architecture Environment) -- Windows resources
+ *
+ *  Compiled by `zig rc` and linked into the launcher stub.  These are the
+ *  details Windows shows when a user hovers the executable in Explorer, opens
+ *  its Properties dialog, searches for it in the Start menu, or looks at the
+ *  taskbar: without them the app inherits the host browser's identity and looks
+ *  like "Microsoft Edge" no matter what the window title says.
+ * ========================================================================== */
+
+#include <winver.h>
+
+/* The icon group lives at ordinal 1, which is what Explorer and the shell use
+ * for an executable's icon.  python3 tools/launcher/make_icon.py rebuilds
+ * ae.ico from the brand artwork at every size from 16 to 256 px. */
+1 ICON "ae.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION     1,0,0,0
+ PRODUCTVERSION  1,0,0,0
+ FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+ FILEFLAGS       0
+ FILEOS          VOS_NT_WINDOWS32
+ FILETYPE        VFT_APP
+ FILESUBTYPE     0
+
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"                 /* US English, Unicode */
+        BEGIN
+            VALUE "CompanyName",      "SPORstudio"
+            VALUE "FileDescription",  "AE - Architecture Environment"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "AE"
+            VALUE "LegalCopyright",   "MIT Licence. Built from the AE source tree."
+            VALUE "OriginalFilename", "AE.exe"
+            VALUE "ProductName",      "AE"
+            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "Comments",         "A complete operating system in one executable."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

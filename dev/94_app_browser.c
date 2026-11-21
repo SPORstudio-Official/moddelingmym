@@ -1,7 +1,7 @@
 /* ==========================================================================
- *  APP: browser -- AetherBrowser
+ *  APP: browser -- AE Browser
  *
- *  A real web browser for AetherOS: address bar, back/forward/reload, a
+ *  A real web browser for AE: address bar, back/forward/reload, a
  *  scrollable document view and clickable links.
  *
  *  Where the page comes from is the host's business.  The kernel calls
@@ -97,9 +97,9 @@ static void br_normalize(const char *in, char *out, int cap) {
 /* -------------------------------------------------------------------------- */
 
 static const char *const BR_START_PAGE =
-    "<html><head><title>AetherBrowser</title></head><body>"
-    "<h1>AetherBrowser</h1>"
-    "<p>This is AetherOS's own browser. Type an address above and press Enter, "
+    "<html><head><title>AE Browser</title></head><body>"
+    "<h1>AE Browser</h1>"
+    "<p>This is AE's own browser. Type an address above and press Enter, "
     "or pick one of the pages below.</p>"
     "<hr>"
     "<h3>Try these</h3>"
@@ -115,19 +115,19 @@ static const char *const BR_START_PAGE =
     "text, headings and links, with scripts and styling dropped. This is a "
     "reader, not a rendering engine, and it is honest about that.</p>"
     "<h3>Offline pages</h3>"
-    "<p><a href=\"aether://about\">aether://about</a> - this system's details</p>"
-    "<p><a href=\"aether://files\">aether://files</a> - the virtual file system</p>"
-    "<p><a href=\"aether://commands\">aether://commands</a> - shell reference</p>"
-    "<p><a href=\"aether://keys\">aether://keys</a> - keyboard shortcuts</p>"
-    "<p>The full documentation shelf is the <b>Ae64</b> folder in your home "
+    "<p><a href=\"ae://about\">ae://about</a> - this system's details</p>"
+    "<p><a href=\"ae://files\">ae://files</a> - the virtual file system</p>"
+    "<p><a href=\"ae://commands\">ae://commands</a> - shell reference</p>"
+    "<p><a href=\"ae://keys\">ae://keys</a> - keyboard shortcuts</p>"
+    "<p>The full documentation shelf is the <b>AE64</b> folder in your home "
     "directory - open Files and look for it.</p>"
     "</body></html>";
 
 static const char *br_local_page(const char *url) {
     static char buf[4096];
-    if (!kstrncmp(url, "aether://about", 14)) {
+    if (!kstrncmp(url, "ae://about", 14)) {
         ksnprintf(buf, sizeof(buf),
-            "<html><body><h1>AetherOS %s</h1>"
+            "<html><body><h1>AE %s</h1>"
             "<p>%s (%s)</p><hr>"
             "<p>Screen: %dx%d at 32bpp</p>"
             "<p>Physical RAM: %u MB</p>"
@@ -135,8 +135,8 @@ static const char *br_local_page(const char *url) {
             "<p>Disk: %u MB ramdisk</p>"
             "<p>Host: %s</p>"
             "<p>CPU: %s</p>"
-            "<hr><p><a href=\"aether://\">back to the start page</a></p></body></html>",
-            AETHER_VERSION_STR, AETHER_CODENAME, AETHER_VERSION_STR,
+            "<hr><p><a href=\"ae://\">back to the start page</a></p></body></html>",
+            AE_VERSION_STR, AE_CODENAME, AE_VERSION_STR,
             SCREEN_W, SCREEN_H,
             (unsigned)(PHYS_RAM_SIZE / (1024u * 1024u)),
             (unsigned)(HEAP_SIZE / (1024u * 1024u)),
@@ -144,7 +144,7 @@ static const char *br_local_page(const char *url) {
             g_machine.host_os, g_machine.cpu_name);
         return buf;
     }
-    if (!kstrncmp(url, "aether://keys", 13)) {
+    if (!kstrncmp(url, "ae://keys", 13)) {
         /* The shortcut reference, generated from the same list the desktop
            implements, so it cannot drift out of date unnoticed. */
         static char keys[4096];
@@ -167,17 +167,18 @@ static const char *br_local_page(const char *url) {
             "<p>Ctrl+L - clear screen &nbsp; Home/End - line ends</p>"
             "<h3>Browser</h3>"
             "<p>Enter - go or search &nbsp; Alt+Left / Alt+Right - back / forward</p>"
-            "<p>F5 - reload &nbsp; Tab - address bar</p>"
+            "<p>F5 - reload &nbsp; Tab - address bar &nbsp; F8 - open on the host</p>"
+            "<p>Ctrl+letter works: Ctrl+C copies, Ctrl+V pastes, Ctrl+N makes a file</p>"
             "<h3>System</h3>"
             "<p>Ctrl+F1 - this page &nbsp; Ctrl+` - toggle scanlines</p>"
             "<p>F4 - deliberately panic the kernel, to demonstrate the handler</p>"
             "<hr><p>The same reference is on disk at "
-            "<b>/home/user/Ae64/keyboard.txt</b></p>"
-            "<p><a href=\"aether://\">start page</a></p></body></html>");
+            "<b>/home/user/AE64/keyboard.txt</b></p>"
+            "<p><a href=\"ae://\">start page</a></p></body></html>");
         (void)n;
         return keys;
     }
-    if (!kstrncmp(url, "aether://files", 14)) {
+    if (!kstrncmp(url, "ae://files", 14)) {
         static char listing[4096];
         int n = (int)kstrlen("<html><body><h1>The virtual file system</h1><p>"
                              "Paths that exist in this machine:</p><hr>");
@@ -188,8 +189,8 @@ static const char *br_local_page(const char *url) {
                 "/", "/home", "/home/user", "/bin", "/etc", "/etc/motd",
                 "/var", "/var/log", "/boot", "/proc", "/proc/cpuinfo",
                 "/proc/meminfo", "/tmp", "/usr", "/usr/share",
-                "/home/user/Ae64", "/home/user/Ae64/keyboard.txt",
-                "/home/user/Ae64/shell.txt", "/etc/desktop.cfg"
+                "/home/user/AE64", "/home/user/AE64/keyboard.txt",
+                "/home/user/AE64/shell.txt", "/etc/desktop.cfg"
             };
             int i;
             for (i = 0; i < (int)(sizeof(paths) / sizeof(paths[0])); i++) {
@@ -201,14 +202,14 @@ static const char *br_local_page(const char *url) {
                 n += (int)kstrlen(line);
                 if (n < (int)sizeof(listing) - 2) kstrncat(listing, line, sizeof(listing) - 1 - (int)kstrlen(listing));
             }
-            kstrncat(listing, "<hr><p><a href=\"aether://\">start page</a></p></body></html>",
+            kstrncat(listing, "<hr><p><a href=\"ae://\">start page</a></p></body></html>",
                      sizeof(listing) - 1 - (int)kstrlen(listing));
         }
         return listing;
     }
-    if (!kstrncmp(url, "aether://commands", 17)) {
+    if (!kstrncmp(url, "ae://commands", 17)) {
         kstrcpy(buf, "<html><body><h1>Shell reference</h1>"
-                     "<p>Open AetherShell from the Start menu and type:</p><hr>"
+                     "<p>Open Crommand from the Start menu and type:</p><hr>"
                      "<p>ls [-l] [path] - list a directory</p>"
                      "<p>cd &lt;dir&gt; - change directory</p>"
                      "<p>cat &lt;file&gt; - print a file</p>"
@@ -219,7 +220,10 @@ static const char *br_local_page(const char *url) {
                      "<p>theme &lt;0-3&gt; - switch themes</p>"
                      "<p>wallpaper &lt;0-3&gt; - switch wallpapers</p>"
                      "<p>browser [url] - open this browser</p>"
-                     "<hr><p><a href=\"aether://\">start page</a></p></body></html>");
+                     "<hr><h3>Crommand\'s own commands</h3>"
+                     "<p>peek / grep / where / biggest / since / bench / grab / note</p>"
+                     "<p>Type <b>help</b> in Crommand for the full list.</p>"
+                     "<hr><p><a href=\"ae://\">start page</a></p></body></html>");
         return buf;
     }
     return BR_START_PAGE;
@@ -279,7 +283,7 @@ static void br_load(browser_t *b, const char *raw) {
     kstrncpy(d->url, url, HTML_URL_MAX - 1);
 
     /* Local pages never touch the network. */
-    if (!kstrncmp(url, "aether://", 9)) {
+    if (!kstrncmp(url, "ae://", 9)) {
         const char *page = br_local_page(url);
         html_parse(d, page);
         html_layout(d, br_text_width(d));
@@ -326,15 +330,41 @@ static void br_complete(browser_t *b, int len) {
         d->error_kind = 1;
         d->ok = 0;
         b->status_kind = 3;
-        ksnprintf(b->status, sizeof(b->status),
-                  len == NET_ERR_TIMEOUT ? "the site did not respond" :
-                  len == NET_ERR_TOO_BIG ? "the page is too large to display" :
-                                           "could not load the page");
+        if (len == NET_ERR_TIMEOUT)
+            ksnprintf(b->status, sizeof(b->status),
+                      "the site did not respond -- it may be offline or blocking this machine");
+        else if (len == NET_ERR_UNSUPPORTED)
+            ksnprintf(b->status, sizeof(b->status), "networking is not available here");
+        else
+            ksnprintf(b->status, sizeof(b->status),
+                      "could not load this site -- press Ctrl+L to open it in a real window");
         return;
     }
     d->text_len = len;
     d->text[len] = 0;
-    html_parse(d, d->text);
+    /* A plain-text document (many sites, every proxy, README files) has no
+       markup at all, and the reader would run every line together into one
+       paragraph.  Wrapping it in <pre> preserves the line breaks. */
+    if (!kstrstr(d->text, "<html") && !kstrstr(d->text, "<HTML") &&
+        !kstrstr(d->text, "<!DOCTYPE") && !kstrstr(d->text, "<body")) {
+        /* In place, so no second copy of a 2 MB buffer is needed: shift the text
+           up by the length of the opening tag and drop the closing tag in
+           behind it. */
+        static const char pre[] = "<html><body><pre>";
+        static const char post[] = "</pre></body></html>";
+        int head = (int)sizeof(pre) - 1;
+        int tail = (int)sizeof(post) - 1;
+        if (len + head + tail < HTML_TEXT_MAX) {
+            kmemmove(d->text + head, d->text, (size_t)len + 1);
+            kmemcpy(d->text, pre, (size_t)head);
+            kmemcpy(d->text + head + len, post, (size_t)tail);
+            d->text[head + len + tail] = 0;
+            d->text_len = len + head + tail;
+        }
+        html_parse(d, d->text);
+    } else {
+        html_parse(d, d->text);
+    }
     html_layout(d, br_text_width(d));
     d->ok = d->block_count > 0;
     if (!d->ok) {
@@ -384,9 +414,9 @@ static void *browser_create(const char *arg) {
     kstrcpy(b->status, "type an address and press Enter");
     /* Load first, focus second: br_load() clears the selection, so focusing
        before it would leave the address bar in append mode and every URL
-       typed on open became "aether://<what was typed>". */
+       typed on open became "ae://<what was typed>". */
     if (arg && arg[0]) br_load(b, arg);
-    else br_load(b, "aether://");
+    else br_load(b, "ae://");
     br_focus_addr(b, 1);
     return b;
 }
@@ -531,7 +561,9 @@ static void browser_paint(void *state, window_t *w, wm_rect_t c) {
             gfx_text_center(c.x + view_w / 2, view_y + view_h / 2 + 2,
                             b->status, t->text_dim, 0);
             gfx_text_center(c.x + view_w / 2, view_y + view_h / 2 + 26,
-                            "Press Back, or edit the address above", t->text_mute, 0);
+                            "Press F8 to open it in a real browser window", t->text_mute, 0);
+            gfx_text_center(c.x + view_w / 2, view_y + view_h / 2 + 48,
+                            "or press Back and try another address", t->text_mute, 0);
         } else {
             gfx_fill_rect(c.x + 1, view_y, view_w, view_h, RGBA(14, 18, 26, 250));
             gfx_text_center(c.x + view_w / 2, view_y + view_h / 2,
@@ -576,6 +608,20 @@ static void browser_key(void *state, int key, int ch, int mods) {
         }
     }
 
+    /* Ctrl+L or F8: this page is beyond what a reader can lay out, so open it
+       in a real window on the host.  This is the honest escape hatch instead of
+       a dead end -- the reader is not a web engine and never will be. */
+    if (key == 0x77 ||
+        ((mods & MOD_CTRL) && (ch == 'l' || ch == 'L'))) {
+        char u[BR_ADDR_MAX];
+        kstrcpy(u, b->addr);
+        hal_open_external(u);
+        b->status_kind = 1;
+        ksnprintf(b->status, sizeof(b->status),
+                  "opened in a real browser window: %s", u);
+        return;
+    }
+
     if (key == 0x74) {           /* F5: reload */
         char u[BR_ADDR_MAX];
         kstrcpy(u, b->addr);
@@ -607,7 +653,7 @@ static void browser_key(void *state, int key, int ch, int mods) {
         if (ch >= 32 && ch < 127 && n < BR_ADDR_MAX - 1) {
             /* A focused address bar starts out with the whole address selected,
                so the first character typed replaces it.  Appending instead is
-               what turned every typed URL into "aether://test.example/page".
+               what turned every typed URL into "ae://test.example/page".
                Clicking into the bar, Escape or any editing key clears the
                selection and returns to ordinary append-at-the-end behaviour. */
             if (b->addr_sel) { b->addr[0] = 0; b->addr_sel = 0; n = 0; }
@@ -743,7 +789,7 @@ static void browser_tick(void *state, u32 dt_ms) {
 }
 
 const app_desc_t app_browser = {
-    "browser", "AetherBrowser", "browse the web", ICON_BROWSER,
+    "browser", "AE Browser", "browse the web", ICON_BROWSER,
     900, 620, 520, 360, APP_CAT_UTIL, 1, 1,
     browser_create, browser_destroy, browser_paint, browser_key, browser_mouse,
     browser_tick, browser_layout

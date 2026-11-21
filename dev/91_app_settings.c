@@ -213,7 +213,7 @@ static void settings_paint(void *state, window_t *w, wm_rect_t c) {
             break;
         }
         default: {
-            gfx_text(x, y, "AetherOS " AETHER_VERSION_STR " \"" AETHER_CODENAME "\"", t->text, 2);
+            gfx_text(x, y, "AE " AE_VERSION_STR " \"" AE_CODENAME "\"", t->text, 2);
             y += 34;
             gfx_text(x, y, "A complete operating system in a single executable.", t->text_dim, 1);
             y += 30;
@@ -237,7 +237,7 @@ static void settings_paint(void *state, window_t *w, wm_rect_t c) {
                 }
             }
             y += 12;
-            gfx_text(x, y, "Build: gcc -O2 -std=c11 aether_os.c -o AetherOS.exe", t->text_mute, 0);
+            gfx_text(x, y, "Build: gcc -O2 -std=c11 aether_os.c -o AE.exe", t->text_mute, 0);
             y += 18;
             gfx_text(x, y, "-lgdi32 -luser32 -lkernel32 -lwinmm -mwindows -static", t->text_mute, 0);
             break;

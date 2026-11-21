@@ -145,7 +145,7 @@ function pressKey(key, code) {
 
 /* ---- run --------------------------------------------------------------- */
 (async () => {
-  console.log('AetherOS host-bridge test\n');
+  console.log('AE host-bridge test\n');
 
   const el = {
     canvas,
@@ -175,7 +175,7 @@ function pressKey(key, code) {
   check('alpha channel is fully opaque', opaque === 1280 * 720, opaque + ' px');
   check('desktop rendered content', nonBlack > 400000, nonBlack + ' non-black px');
 
-  /* ---- keyboard: type into AetherShell -------------------------------- */
+  /* ---- keyboard: type into Crommand -------------------------------- */
   /* Sample the terminal body only; the taskbar clock and CPU meter animate on
      their own and would make any full-frame comparison meaningless. */
   const TX0 = 290, TY0 = 150, TX1 = 1020, TY1 = 560;

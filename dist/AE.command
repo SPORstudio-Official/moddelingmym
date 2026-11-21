@@ -1,7 +1,7 @@
 #!/bin/bash
-# AetherOS -- open the single-file build in a chrome-less app window.
+# AE -- open the single-file build in a chrome-less app window.
 cd "$(dirname "$0")"
-APP="$PWD/AetherOS.html"
+APP="$PWD/AE.html"
 for b in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
          "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
          "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"; do

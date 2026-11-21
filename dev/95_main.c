@@ -72,8 +72,8 @@ static void boot_render(u32 elapsed_ms) {
                          RGBA(90, 190, 255, 120));
             }
         }
-        gfx_text_center(cx, cy + r + 18, "AetherOS", RGB(226, 240, 255), 2);
-        gfx_text_center(cx, cy + r + 44, AETHER_VERSION_STR "  \"" AETHER_CODENAME "\"  --  single-executable operating system",
+        gfx_text_center(cx, cy + r + 18, "AE", RGB(226, 240, 255), 2);
+        gfx_text_center(cx, cy + r + 44, AE_VERSION_STR "  \"" AE_CODENAME "\"  --  single-executable operating system",
                         RGB(120, 150, 180), 0);
     }
 
@@ -128,14 +128,14 @@ static void panic_render(u32 elapsed) {
     gfx_reset_clip();
     gfx_fill_rect(0, 0, SCREEN_W, SCREEN_H, RGB(0, 0, 168));
     gfx_fill_rect(0, 0, SCREEN_W, 22, RGB(0, 0, 168));
-    gfx_text_term(40, 40, "*** AetherOS KERNEL PANIC ***", RGB(255, 255, 255), 0, 0);
+    gfx_text_term(40, 40, "*** AE KERNEL PANIC ***", RGB(255, 255, 255), 0, 0);
     y = 72;
     ksnprintf(buf, sizeof(buf), "reason: %s", g_panic_reason);
     gfx_text_term(40, y, buf, RGB(255, 255, 255), 0, 0); y += 24;
     ksnprintf(buf, sizeof(buf), "EIP=0x%08X  PID=%u (%s)  kernel %s", (unsigned)g_panic_eip,
               (unsigned)g_panic_pid,
               proc_pcb(g_panic_pid) ? proc_pcb(g_panic_pid)->name : "kernel",
-              AETHER_VERSION_STR);
+              AE_VERSION_STR);
     gfx_text_term(40, y, buf, RGB(255, 255, 255), 0, 0); y += 32;
 
     gfx_text_term(40, y, "CPU registers:", RGB(200, 200, 255), 0, 0); y += 20;
@@ -258,7 +258,7 @@ int aether_boot(int argc, char **argv) {
         return 1;
     }
     klog_clear();
-    klog("AetherOS %s (%s) booting on the %s chassis", AETHER_VERSION_STR, AETHER_CODENAME,
+    klog("AE %s (%s) booting on the %s chassis", AE_VERSION_STR, AE_CODENAME,
          g_machine.host_os);
     klog("hal: physical RAM 0x00000000-0x%08X reserved as one contiguous block",
          (unsigned)PHYS_RAM_SIZE);
@@ -442,7 +442,7 @@ int aether_frame(void) {
                 const app_desc_t *d = app_by_id("sh");
                 if (d) wm_open_app(d, NULL);
             }
-            notify_ex("Welcome to AetherOS -- right-click a desktop icon", 1);
+            notify_ex("Welcome to AE -- right-click a desktop icon", 1);
         }
         return hal_running();
     }

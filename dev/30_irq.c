@@ -378,6 +378,16 @@ void irq_host_event(const hal_event_t *ev) {
             irq_keyboard_push(0x0E, 1, '\b');
         } else if (ev->ch == 9) {
             irq_keyboard_push(0x0F, 1, '\t');
+        } else if (ev->ch > 0 && ev->ch < 32) {
+            /* Every other control character.  Ctrl+C reaches a host as the
+               character 0x03, not as the letter "c" carrying a modifier flag,
+               so dropping control codes entirely meant Ctrl+letter could not
+               work anywhere in the system: no copy/paste in the file manager,
+               no Ctrl+C or Ctrl+L in the shell.  Delivered as a glyph with no
+               scancode, so the app sees exactly the byte that was pressed.
+               It has to come after Enter/Backspace/Tab above, which need their
+               real scancodes. */
+            irq_keyboard_push(0x00, 1, ev->ch);
         }
         break;
     }

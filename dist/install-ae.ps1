@@ -1,11 +1,11 @@
 <#
-    AetherOS one-click installer
+    AE one-click installer
     ----------------------------
-    Downloads the latest AetherOS.exe, verifies its SHA-256, and launches it.
+    Downloads the latest AE.exe, verifies its SHA-256, and launches it.
 
-        powershell -ExecutionPolicy Bypass -File install-aetheros.ps1
+        powershell -ExecutionPolicy Bypass -File install-ae.ps1
 
-    There is genuinely nothing to install: AetherOS is a single self-contained
+    There is genuinely nothing to install: AE is a single self-contained
     executable with no runtime, no DLLs and no registry footprint.  "Installing"
     therefore means "fetch it, check the checksum, start it" -- which is what
     this script does.  The optional -AddShortcut switch drops a Start Menu
@@ -13,9 +13,9 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Url = 'https://raw.githubusercontent.com/SPORstudio-Official/moddelingmym/main/dist/AetherOS.exe',
+    [string] $Url = 'https://raw.githubusercontent.com/SPORstudio-Official/moddelingmym/main/dist/AE.exe',
     [string] $Sha256 = 'db51d14e75a3bd162e77142b3443e4ec65b9c061346aeead15a8e2c6796e2574',
-    [string] $InstallDir = (Join-Path $env:LOCALAPPDATA 'AetherOS'),
+    [string] $InstallDir = (Join-Path $env:LOCALAPPDATA 'AE'),
     [switch] $AddShortcut,
     [switch] $NoLaunch
 )
@@ -26,11 +26,11 @@ $ProgressPreference = 'SilentlyContinue'
 function Write-Step($msg) { Write-Host "  $msg" }
 
 Write-Host ''
-Write-Host '  AetherOS installer' -ForegroundColor Cyan
+Write-Host '  AE installer' -ForegroundColor Cyan
 Write-Host '  -----------------' -ForegroundColor Cyan
 
 # --- 1. download -----------------------------------------------------------
-$target = Join-Path $InstallDir 'AetherOS.exe'
+$target = Join-Path $InstallDir 'AE.exe'
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 Write-Step "downloading $Url"
@@ -39,7 +39,7 @@ try {
     Invoke-WebRequest -Uri $Url -OutFile $tmp -UseBasicParsing
 } catch {
     Write-Host "  download failed: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host '  Tip: open the URL in a browser and save the file as AetherOS.exe.' -ForegroundColor Yellow
+    Write-Host '  Tip: open the URL in a browser and save the file as AE.exe.' -ForegroundColor Yellow
     exit 1
 }
 
@@ -62,19 +62,19 @@ Write-Step "installed to $target"
 
 # --- 3. optional shortcut --------------------------------------------------
 if ($AddShortcut) {
-    $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'AetherOS.lnk'
+    $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'AE.lnk'
     $sh = New-Object -ComObject WScript.Shell
     $s = $sh.CreateShortcut($lnk)
     $s.TargetPath = $target
     $s.WorkingDirectory = $InstallDir
-    $s.Description = 'AetherOS - a 32-bit operating system in one executable'
+    $s.Description = 'AE - a 32-bit operating system in one executable'
     $s.Save()
     Write-Step "shortcut created: $lnk"
 }
 
 # --- 4. launch -------------------------------------------------------------
 if (-not $NoLaunch) {
-    Write-Step 'starting AetherOS'
+    Write-Step 'starting AE'
     Start-Process -FilePath $target
 }
 

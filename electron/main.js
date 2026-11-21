@@ -1,5 +1,5 @@
 /* ==========================================================================
- *  AetherOS -- Electron main process
+ *  AE -- Electron main process
  *
  *  Owns one window and nothing else.  The window is just a frame around a
  *  <canvas>; the operating system itself is the WebAssembly module the window
@@ -49,7 +49,7 @@ function createWindow() {
     minHeight: Math.min(400, height),
     center: true,
     backgroundColor: '#05070c',
-    title: 'AetherOS',
+    title: 'AE',
     show: false,
     autoHideMenuBar: true,
     webPreferences: {

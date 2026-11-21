@@ -10,7 +10,7 @@
  *    - raw keyboard / mouse hardware events      (no widgets, no controls)
  *
  *  Nothing above this layer ever calls a Win32 UI API.  All desktop content is
- *  produced by the AetherOS compositor.
+ *  produced by the AE compositor.
  * ========================================================================== */
 
 /* 40_gfx.c draws the software pointer; the HAL composites it as the final step
@@ -131,7 +131,7 @@ int hal_init(void) {
     g_machine.cpu_mhz = 2400;
     kstrcpy(g_machine.cpu_name, "Aether Virtual CPU (webassembly)");
     kstrcpy(g_machine.host_os, "web");
-    js_set_title("AetherOS");
+    js_set_title("AE");
     return 0;
 }
 
@@ -143,6 +143,7 @@ int  hal_running(void) { return g_hal_running; }
 u32 *hal_vram(void) { return g_vram; }
 
 void hal_set_title(const char *t) { js_set_title(t); }
+void hal_open_external(const char *url) { js_open_external(url); }
 
 /* A wasm module must not block its host: the shell already paces frames with
    requestAnimationFrame, so sleeping is a no-op here. */
@@ -284,6 +285,11 @@ void hal_shutdown(void) {
 int  hal_running(void) { return g_hal_running; }
 u32 *hal_vram(void) { return g_vram; }
 void hal_set_title(const char *t) { (void)t; }
+void hal_open_external(const char *url) {
+    /* No host browser in a headless run: record it, which is also how the
+       test harness asserts that the escape hatch was taken. */
+    fprintf(stderr, "[hal] open external: %s\n", url ? url : "(null)");
+}
 void hal_sleep_ms(int ms) { usleep((unsigned int)(ms < 0 ? 0 : ms) * 1000u); }
 void hal_present(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; }
 void hal_flush_all(void) {}
@@ -481,6 +487,12 @@ void hal_set_title(const char *t) {
     if (g_hwnd) SetWindowTextA(g_hwnd, t);
 }
 
+void hal_open_external(const char *url) {
+    /* Hand the URL to the user's real browser.  The OS window is still the app;
+       this is the escape hatch for pages that need a web engine. */
+    if (url && *url) ShellExecuteA(NULL, "open", url, NULL, NULL, SW_SHOWNORMAL);
+}
+
 void hal_sleep_ms(int ms) { Sleep((DWORD)(ms < 0 ? 0 : ms)); }
 
 void hal_get_native_mouse(int *x, int *y) {
@@ -663,7 +675,7 @@ int hal_init(void) {
     wc.hInstance = hinst;
     wc.hCursor = NULL;
     wc.hbrBackground = NULL;
-    wc.lpszClassName = "AetherOSClass";
+    wc.lpszClassName = "AEClass";
     wc.hIcon = LoadIconA(NULL, IDI_APPLICATION);
     if (!RegisterClassExA(&wc)) return -2;
 
@@ -672,7 +684,7 @@ int hal_init(void) {
     AdjustWindowRect(&r, style, FALSE);
     sw = r.right - r.left;
     sh = r.bottom - r.top;
-    g_hwnd = CreateWindowExA(WS_EX_APPWINDOW, "AetherOSClass", "AetherOS",
+    g_hwnd = CreateWindowExA(WS_EX_APPWINDOW, "AEClass", "AE",
                              style, (GetSystemMetrics(SM_CXSCREEN) - sw) / 2,
                              (GetSystemMetrics(SM_CYSCREEN) - sh) / 2,
                              sw, sh, NULL, NULL, hinst, NULL);

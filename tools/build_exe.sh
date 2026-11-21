@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Build AetherOS.exe -- the standalone Windows application.
+# Build AE.exe -- the standalone Windows application.
 #
 #   ./tools/build_exe.sh
 #
-# Produces one self-contained .exe that carries the whole single-file AetherOS
+# Produces one self-contained .exe that carries the whole single-file AE
 # build inside it. Double-click it and the OS opens in an app-style window.
 #
 # Two parts, joined by a marker:
 #   1. tools/launcher/launcher.c compiled freestanding to a tiny GUI executable
 #      (no C runtime; imports only kernel32, shell32 and advapi32)
-#   2. dist/AetherOS.html appended after the PE image
+#   2. dist/AE.html appended after the PE image
 #
-# The launcher finds the marker, writes the payload to %TEMP%\AetherOS.html and
+# The launcher finds the marker, writes the payload to %TEMP%\AE.html and
 # opens it in Edge or Chrome --app mode. Every failure path shows a message box,
 # so the exe can never fail silently the way the old build did.
 # ============================================================================
@@ -30,7 +30,7 @@ echo "==> building the WebAssembly image and the single-file app"
 ./tools/build_wasm.sh
 node tools/bundle_standalone.js
 
-HTML=dist/AetherOS.html
+HTML=dist/AE.html
 [ -f "$HTML" ] || { echo "missing $HTML" >&2; exit 1; }
 
 echo "==> compiling the launcher stub"
@@ -39,20 +39,27 @@ echo "==> compiling the launcher stub"
 ZIG_LIBC=$(dirname "$ZIG")/lib/libc/include/any-windows-any
 [ -d "$ZIG_LIBC" ] || ZIG_LIBC=$(dirname "$ZIG")/lib/libc/include/x86_64-windows-any
 
-STUB=$(mktemp -d)/AetherOS-stub.exe
+STUB=$(mktemp -d)/AE-stub.exe
 trap 'rm -rf "$(dirname "$STUB")"' EXIT
+
+# Resources: the AE icon and the version metadata that Explorer, the Start menu,
+# search and the taskbar read instead of the host browser's.  `zig rc` is a
+# drop-in rc.exe, so no Windows toolchain is needed to build them.
+echo "==> compiling the icon and version resources"
+RES=$(mktemp -d)/ae.res
+"$ZIG" rc /fo "$RES" tools/launcher/ae.rc
 
 # -nostdlib: no C runtime, exactly like the kernel build.  The launcher supplies
 # its own string helpers, so the import table stays at kernel32/shell32/advapi32.
 "$ZIG" cc -target x86_64-windows-gnu -O2 -std=c11 \
     -Wl,--subsystem,windows -Wl,--entry,aether_launcher_entry \
     -nostdlib -isystem "$ZIG_LIBC" \
-    tools/launcher/launcher.c -o "$STUB" \
+    tools/launcher/launcher.c "$RES" -o "$STUB" \
     -Wl,--stack,1048576 \
     -lkernel32 -lshell32 -ladvapi32 -luser32
 
 echo "==> appending the payload"
-OUT=dist/AetherOS.exe
+OUT=dist/AE.exe
 cat "$STUB" "$HTML" > "$OUT"
 
 # --- verify the result -----------------------------------------------------

@@ -1,4 +1,4 @@
-/* AetherOS shell chrome.  Deliberately minimal: the OS draws its own desktop,
+/* AE shell chrome.  Deliberately minimal: the OS draws its own desktop,
    so the shell contributes only a black letterbox and a thin status strip. */
 
 * { box-sizing: border-box; }

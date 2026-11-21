@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build AetherOS for the host (Linux) with the headless chassis and run a script.
+# Build AE for the host (Linux) with the headless chassis and run a script.
 #   tools/headless_run.sh [script-file]
 set -euo pipefail
 cd "$(dirname "$0")/.."

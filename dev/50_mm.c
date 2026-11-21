@@ -355,7 +355,7 @@ int mm_kfree(void *ptr) {
        on the list made the list hold interior pointers (and eventually a
        cycle), after which an allocation could be handed a block that overlapped
        a live one -- the corruption that used to show up as a free-list node
-       pointing into the string "AetherOS". */
+       pointing into the string "AE". */
     /* backward coalesce */
     if (b->prev && (b->prev->flags & MM_FLAG_FREE) && b->prev->magic == MM_MAGIC_FREE) {
         mm_block_t *p = b->prev;

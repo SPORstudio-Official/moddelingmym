@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# AetherOS -- WebAssembly build
+# AE -- WebAssembly build
 #
 #   Compiles the same kernel sources used by the Windows executable into a
 #   freestanding wasm32 module that the Electron shell in app/ instantiates.

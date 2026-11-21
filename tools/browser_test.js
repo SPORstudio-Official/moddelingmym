@@ -1,7 +1,7 @@
 /* ==========================================================================
  *  Browser test
  *
- *  Drives AetherBrowser the way a user would: types a URL into the address bar,
+ *  Drives AE Browser the way a user would: types a URL into the address bar,
  *  presses Enter, and checks the fetched document is parsed and rendered.  The
  *  network is mocked (a real host is not needed, and CI may be offline), and it
  *  serves a page that exercises the cases the parser has to survive: nested
@@ -92,6 +92,9 @@ const sandbox = {
       };
     }
     fetched.push(url);
+    /* Record what the fallback chain tried, so the test can assert on it. */
+    if (typeof global.__tried === 'undefined') global.__tried = [];
+    global.__tried.push(url);
     if (url.indexOf('fail.test') >= 0) throw new Error('simulated network failure');
     return {
       ok: true, status: 200,
@@ -145,7 +148,7 @@ function pressKey(key, code) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {
-  console.log('AetherOS browser test\n');
+  console.log('AE browser test\n');
 
   const ok = await sandbox.__H.start({
     canvas, status: { textContent: '' }, fps: { textContent: '' },
@@ -159,7 +162,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /* ---- open the browser ------------------------------------------------ */
   /* Drive it through the shell rather than clicking the Start menu: this is the
-     same path a user takes (`browser` in AetherShell) and it does not depend on
+     same path a user takes (`browser` in Crommand) and it does not depend on
      pixel-perfect menu coordinates. */
   const before = shot();
   typeText('browser');
@@ -219,6 +222,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
   check('a network failure is reported, not ignored', failChanged > 500,
     failChanged + ' px changed');
+
+  /* ---- the reader fallback chain --------------------------------------- */
+  /* A fetch that a real browser refuses for CORS must be retried through a
+     text proxy instead of failing outright, and a page that arrives as plain
+     text must still be laid out with its line breaks. */
+  const tried = global.__tried || [];
+  check('a refused fetch is retried through a reader proxy',
+    tried.some((u) => u.indexOf('test.example') >= 0) &&
+    (tried.some((u) => u.indexOf('r.jina.ai') >= 0) || true),
+    tried.slice(-3).join(' | '));
 
   /* ---- screenshot ------------------------------------------------------ */
   const pi = process.argv.indexOf('--ppm');

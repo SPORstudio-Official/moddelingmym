@@ -4,7 +4,7 @@
  *
  *  The Electron app loads app/index.html from disk, but the same files work in
  *  any browser when served over HTTP -- which is how the live preview runs and
- *  how you can try AetherOS without installing anything.
+ *  how you can try AE without installing anything.
  *
  *  A .wasm body must be served as application/wasm, otherwise
  *  WebAssembly.instantiate() refuses to stream-compile it.
@@ -56,5 +56,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`AetherOS shell on http://${HOST}:${PORT}/ (serving ${ROOT})`);
+  console.log(`AE shell on http://${HOST}:${PORT}/ (serving ${ROOT})`);
 });

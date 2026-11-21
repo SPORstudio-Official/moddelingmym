@@ -47,7 +47,7 @@
 #  include <windowsx.h>       /* GET_X_LPARAM / GET_Y_LPARAM                */
 #  include <mmsystem.h>       /* timeBeginPeriod / timeEndPeriod            */
 /* The Win32 headers define macros whose names collide with kernel vocabulary.
-   Nothing in AetherOS uses the Win32 meaning, and leaving them defined breaks
+   Nothing in AE uses the Win32 meaning, and leaving them defined breaks
    the syscall enum and the modifier bitmask, so they are removed here. */
 #  undef MOD_ALT
 #  undef MOD_CONTROL
@@ -109,7 +109,10 @@ void js_request_quit(void);
  *  Buffers are owned by the host and released by js_http_release().  The cap
  *  keeps a huge page from exhausting the module's linear memory.
  * ---------------------------------------------------------------------- */
-#define AETHER_HTTP_MAX_BODY (512 * 1024)
+/* A modern article page is routinely 300-800 KB of HTML before any script runs,
+   and the old 512 KB ceiling truncated the biggest ones.  The reader keeps up to
+   HTML_TEXT_MAX (2 MB) of text; this is the transfer budget above that. */
+#define AETHER_HTTP_MAX_BODY (2 * 1024 * 1024)
 __attribute__((import_module("env"), import_name("js_http_get")))
 int  js_http_get(const char *url);
 __attribute__((import_module("env"), import_name("js_http_state")))
@@ -126,10 +129,17 @@ __attribute__((import_module("env"), import_name("js_open_external")))
 void js_open_external(const char *url);
 #endif
 
+/* Open a URL outside the OS window, in a real browser on the host.  Every
+ * chassis provides this: the wasm build forwards it to window.open(), the
+ * standalone Windows build to ShellExecute(), and the headless build logs it.
+ * Apps call this and never the js_* import directly, or they stop linking on
+ * the chassis that has no JavaScript host. */
+void hal_open_external(const char *url);
+
 #define AETHER_VERSION_MAJOR 1
 #define AETHER_VERSION_MINOR 0
-#define AETHER_VERSION_STR "1.0.0-aether"
-#define AETHER_CODENAME "Nebula"
+#define AE_VERSION_STR "1.0.0-ae"
+#define AE_CODENAME "Nebula"
 
 /* --------------------------------------------------------------------------
  *  Hardware geometry (the emulated machine)
@@ -182,7 +192,7 @@ void net_abort(int slot);
  * -------------------------------------------------------------------------- */
 #define RGBA(r, g, b, a) (((u32)(a) << 24) | ((u32)(r) << 16) | ((u32)(g) << 8) | (u32)(b))
 #ifdef RGB
-#  undef RGB                  /* win32 GDI macro; AetherOS packs ARGB */
+#  undef RGB                  /* win32 GDI macro; AE packs ARGB */
 #endif
 #define RGB(r, g, b)     RGBA(r, g, b, 255)
 #define ALPHA(c)         (((c) >> 24) & 0xFF)
