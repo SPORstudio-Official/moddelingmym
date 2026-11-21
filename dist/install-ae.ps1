@@ -7,7 +7,7 @@
 
     One line, nothing to answer:
 
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/releases/download/v1.0.0-aether/install-ae.ps1 | iex"
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/install-ae.ps1 | iex"
 
     Or download this file and right-click -> Run with PowerShell.
 
@@ -22,10 +22,12 @@
 #>
 [CmdletBinding()]
 param(
-    # Release asset name carries the version, so an already-installed copy and a
-    # running copy are never in the way of each other.
-    [string] $Version  = '1.0.0',
-    [string] $BaseUrl  = 'https://github.com/SPORstudio-Official/moddelingmym/releases/download/v1.0.0-aether',
+    # Only used in the messages below; the asset name is fixed.
+    [string] $Version  = '1.0.0-aether',
+    # The build lives in the repository rather than in a release asset, so this
+    # is the same bytes the build produced, served straight from git.  `raw`
+    # redirects to the CDN, which Invoke-WebRequest follows.
+    [string] $BaseUrl  = 'https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist',
     [string] $Sha256   = '99349ca3aec446e3742fe7efd30f61fdcbfd495b677a660f7d00f2af0e24a5cc',
     [string] $InstallDir = (Join-Path $env:LOCALAPPDATA 'AE'),
     [switch] $AddShortcut,
@@ -60,7 +62,8 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 } catch { }
 
-$asset = "AE.exe"
+# The release asset is plain AE.exe; $Version is what gets reported to the user.
+$asset = 'AE.exe'
 $url   = "$BaseUrl/$asset"
 $target = Join-Path $InstallDir 'AE.exe'
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
@@ -75,10 +78,9 @@ try {
     Write-Host "  Download failed." -ForegroundColor Red
     Write-Host "    $url" -ForegroundColor DarkGray
     Write-Host "    $($_.Exception.Message)" -ForegroundColor DarkGray
-    Write-Host ''
-    Write-Host '  If you are signed out, sign in to GitHub first -- this repository' -ForegroundColor Yellow
-    Write-Host '  is private, so the release asset is only served to accounts that' -ForegroundColor Yellow
-    Write-Host '  can read it.' -ForegroundColor Yellow
+    Write-Host '  Check that the address above opens in a browser. If it downloads a' -ForegroundColor Yellow
+    Write-Host '  file, the network here is blocking PowerShell rather than GitHub --' -ForegroundColor Yellow
+    Write-Host '  save that file as AE.exe and run it; it is self-contained.' -ForegroundColor Yellow
     Write-Host ''
     exit 1
 }

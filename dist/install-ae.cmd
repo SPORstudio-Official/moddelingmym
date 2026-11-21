@@ -11,7 +11,7 @@ rem  it applies to this one invocation only and changes no machine setting.
 rem ---------------------------------------------------------------------------
 setlocal
 set "HERE=%~dp0"
-set "REL=https://github.com/SPORstudio-Official/moddelingmym/releases/download/v1.0.0-aether"
+set "REL=https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist"
 
 if exist "%HERE%install-ae.ps1" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%install-ae.ps1" %*
