@@ -1903,6 +1903,29 @@ u32 wm_fps_x100(void) { return g_wm.fps_x100; }
 int wm_frame_ms(void) { return (int)g_wm.frame_ms; }
 int wm_total_frames(void) { return g_wm.frames; }
 
+/* Release every open window before the window table is wiped.  reboot used to
+   call wm_init() directly, which zeroed g_wm and left each window's heap state
+   allocated for the rest of the session; worse, any code that still held a
+   window id from the previous generation could paint through a stale pointer. */
+void wm_shutdown(void) {
+    int i;
+    for (i = g_wm.count - 1; i >= 0; i--) {
+        if (!g_wm.win[i].used) continue;
+        if (g_wm.win[i].desc && g_wm.win[i].desc->destroy)
+            g_wm.win[i].desc->destroy(g_wm.win[i].state);
+        g_wm.win[i].state = NULL;
+        kmemset(&g_wm.win[i], 0, sizeof(g_wm.win[i]));
+    }
+    g_wm.count = 0;
+    wm_reindex_z();
+    g_wm.focused = 0;
+    g_wm.ctx_open = 0;
+    g_wm.start_open = 0;
+    g_wm.drag_mode = 0;
+    g_wm.mouse_down = 0;
+    g_wm.mouse_right_down = 0;
+}
+
 void wm_init(void) {
     kmemset(&g_wm, 0, sizeof(g_wm));
     g_wm.next_id = 100;

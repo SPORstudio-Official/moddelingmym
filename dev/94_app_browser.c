@@ -19,6 +19,7 @@ typedef struct {
     char status[128];               /* status bar text                        */
     int  status_kind;               /* 0 info, 1 ok, 2 warn, 3 error          */
     int  editing;                   /* address bar has keyboard focus        */
+    int  addr_sel;                  /* whole address selected: typing replaces it */
     int  loading;                   /* a request is in flight                */
     int  scroll;
     int  hover_link;
@@ -228,6 +229,14 @@ static const char *br_local_page(const char *url) {
 /*  Navigation                                                             */
 /* -------------------------------------------------------------------------- */
 
+/* Giving the address bar focus selects the address, exactly like a desktop
+   browser: the next character typed starts a new address rather than being
+   appended to the current one. */
+static void br_focus_addr(browser_t *b, int select_all) {
+    b->editing = 1;
+    b->addr_sel = select_all && b->addr[0] ? 1 : 0;
+}
+
 static void br_load(browser_t *b, const char *url);
 
 /* Width of the text column inside the current window, in pixels. */
@@ -261,6 +270,7 @@ static void br_load(browser_t *b, const char *raw) {
 
     br_normalize(raw, url, sizeof(url));
     kstrncpy(b->addr, url, BR_ADDR_MAX - 1);
+    b->addr_sel = 0;
     b->scroll = 0;
     b->hover_link = -1;
 
@@ -371,10 +381,13 @@ static void *browser_create(const char *arg) {
     if (!b->doc) { mm_kfree(b); return NULL; }
     kmemset(b->doc, 0, sizeof(*b->doc));
     b->hover_link = -1;
-    b->editing = 1;
     kstrcpy(b->status, "type an address and press Enter");
+    /* Load first, focus second: br_load() clears the selection, so focusing
+       before it would leave the address bar in append mode and every URL
+       typed on open became "aether://<what was typed>". */
     if (arg && arg[0]) br_load(b, arg);
     else br_load(b, "aether://");
+    br_focus_addr(b, 1);
     return b;
 }
 
@@ -481,8 +494,14 @@ static void browser_paint(void *state, window_t *w, wm_rect_t c) {
             /* right-align the tail of a long URL, like a real address bar */
             while (b->addr[off] && gfx_text_w(b->addr + off, 0) > addr_w - 2 * pad) off++;
         }
+        if (b->editing && b->addr_sel) {
+            /* draw the selection, the way a focused address bar looks */
+            int tw = gfx_text_w(b->addr + off, 0);
+            if (tw > addr_w - 2 * pad) tw = addr_w - 2 * pad;
+            gfx_fill_rect(addr_x + pad - 1, c.y + 11, tw + 2, 16, RGBA(58, 110, 190, 190));
+        }
         gfx_text_clip(addr_x + pad, c.y + 13, addr_w - 2 * pad,
-                      b->addr + off, t->text, 0);
+                      b->addr + off, b->editing && b->addr_sel ? CLR_WHITE : t->text, 0);
         if (b->editing && ((now_ms() / 500) & 1)) {
             int cx = addr_x + pad + gfx_text_w(b->addr + off, 0) + 1;
             if (cx < addr_x + addr_w - pad)
@@ -578,12 +597,20 @@ static void browser_key(void *state, int key, int ch, int mods) {
             br_load(b, u);
             return;
         }
-        if (key == 0x1B) { b->editing = 0; return; }   /* Escape */
+        if (key == 0x1B) { b->editing = 0; b->addr_sel = 0; return; }   /* Escape */
         if (key == 0x08) {                             /* Backspace */
+            if (b->addr_sel) { b->addr[0] = 0; b->addr_sel = 0; return; }
             if (n > 0) b->addr[n - 1] = 0;
             return;
         }
+        if (key == 0x2E) { b->addr[0] = 0; b->addr_sel = 0; return; }   /* Delete */
         if (ch >= 32 && ch < 127 && n < BR_ADDR_MAX - 1) {
+            /* A focused address bar starts out with the whole address selected,
+               so the first character typed replaces it.  Appending instead is
+               what turned every typed URL into "aether://test.example/page".
+               Clicking into the bar, Escape or any editing key clears the
+               selection and returns to ordinary append-at-the-end behaviour. */
+            if (b->addr_sel) { b->addr[0] = 0; b->addr_sel = 0; n = 0; }
             b->addr[n] = (char)ch;
             b->addr[n + 1] = 0;
         }
@@ -594,7 +621,7 @@ static void browser_key(void *state, int key, int ch, int mods) {
        typing an address -- hand the keys to the address bar instead of dropping
        them.  There is nothing else on the page that accepts text. */
     if (ch >= 32 && ch < 127) {
-        b->editing = 1;
+        br_focus_addr(b, 0);
         b->addr[0] = 0;
         b->addr[0] = (char)ch;
         b->addr[1] = 0;
@@ -610,7 +637,7 @@ static void browser_key(void *state, int key, int ch, int mods) {
         b->scroll = d ? d->total_h : 0;
     }
     if (key == 0x24) { b->scroll = 0; }              /* Home  */
-    if (key == 0x09) { b->editing = 1; }             /* Tab: back to address */
+    if (key == 0x09) { br_focus_addr(b, 1); }        /* Tab: back to address */
     if (key == 0x0D && b->hover_link >= 0) br_follow(b, b->hover_link);
     if (b->scroll < 0) b->scroll = 0;
 }
@@ -652,7 +679,7 @@ static void browser_mouse(void *state, int event, int x, int y, int button, int 
             int addr_x = cc.x + BR_ADDR_X;
             int addr_w = cc.w + BR_ADDR_W;
             if (addr_w < 120) addr_w = 120;
-            if (x >= addr_x && x < addr_x + addr_w) { b->editing = 1; return; }
+            if (x >= addr_x && x < addr_x + addr_w) { br_focus_addr(b, 1); return; }
         }
     }
 
@@ -661,6 +688,7 @@ static void browser_mouse(void *state, int event, int x, int y, int button, int 
         if (li >= 0) { br_follow(b, li); return; }
     }
     b->editing = 0;
+    b->addr_sel = 0;
 }
 
 static void browser_layout(void *state, wm_rect_t client) {

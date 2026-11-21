@@ -295,11 +295,39 @@ int aether_boot(int argc, char **argv) {
  *
  *  Returns 1 while the machine is still running, 0 once it has shut down.
  * ------------------------------------------------------------------------ */
+static int g_reboot_pending;
+
 int aether_frame(void) {
     hal_event_t ev;
     u64 now;
     u32 dt;
     u32 frame_dt = 16;
+
+    /* A reboot request arrives from inside a callback (the shell's `reboot`
+       command, or the panic handler), i.e. with the requesting application
+       still on the C stack.  Tearing the window table down right there freed
+       the very shell state that was about to paint itself, which crashed the
+       kernel on the next frame.  The teardown is therefore deferred to the top
+       of the following frame, when no callback is running. */
+    if (g_reboot_pending) {
+        g_reboot_pending = 0;
+        klog("kernel: reboot requested, restarting the kernel subsystems");
+        gfx_clear(RGB(0, 0, 0));
+        present_dirty_region();
+        wm_shutdown();
+        proc_init();
+        cc_init();
+        irq_init();
+        /* Deliberately no mm_release_owner(0): pid 0 is the kernel, and releasing
+           it frees *every* block in the heap, including globals that outlive the
+           reboot (fonts, icon caches, the framebuffer shadow).  The next window
+           opened after a reboot then painted through a dangling pointer and the
+           kernel faulted.  Windows are released properly by wm_shutdown(). */
+        wm_init();
+        proc_boot_daemons();
+        g_boot_start_ms = now_ms() + 400;
+        g_boot_stage = 1;
+    }
 
     while (hal_poll_event(&ev)) {
         if (ev.type == HAL_EV_QUIT) { hal_request_quit(); break; }
@@ -434,19 +462,8 @@ int aether_frame(void) {
     present_dirty_region();
 
     if (wm_take_quit()) { hal_request_quit(); }
-    if (wm_take_reboot()) {
-        klog("kernel: reboot requested, restarting the kernel subsystems");
-        gfx_clear(RGB(0, 0, 0));
-        present_dirty_region();
-        proc_init();
-        cc_init();
-        irq_init();
-        mm_release_owner(0);
-        wm_init();
-        proc_boot_daemons();
-        g_boot_start_ms = now_ms() + 400;
-        g_boot_stage = 1;
-    }
+    /* Deferred: see the top of aether_frame(). */
+    if (wm_take_reboot()) g_reboot_pending = 1;
     if (wm_take_crash()) {
         kernel_panic("kernel panic triggered from the Start menu", 0x0001F4A0, proc_running_pid());
     }
