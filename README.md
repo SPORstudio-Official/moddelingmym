@@ -19,12 +19,12 @@ a browser in rendering AE, so the taskbar, Alt+Tab and Start-menu search all say
 
 ## Download
 
-**https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/download.html**
+**https://sporstudio-official.github.io/moddelingmym/**
 
 That page has a single install button. Or, one line in PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/install-ae.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/main/dist/install-ae.ps1 | iex"
 ```
 
 It downloads AE, verifies the SHA-256, installs it to `%LOCALAPPDATA%\AE`, adds a

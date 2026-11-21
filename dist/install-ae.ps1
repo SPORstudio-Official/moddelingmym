@@ -7,7 +7,7 @@
 
     One line, nothing to answer:
 
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/install-ae.ps1 | iex"
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/main/dist/install-ae.ps1 | iex"
 
     Or download this file and right-click -> Run with PowerShell.
 
@@ -27,7 +27,7 @@ param(
     # The build lives in the repository rather than in a release asset, so this
     # is the same bytes the build produced, served straight from git.  `raw`
     # redirects to the CDN, which Invoke-WebRequest follows.
-    [string] $BaseUrl  = 'https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist',
+    [string] $BaseUrl  = 'https://github.com/SPORstudio-Official/moddelingmym/raw/main/dist',
     [string] $Sha256   = '99349ca3aec446e3742fe7efd30f61fdcbfd495b677a660f7d00f2af0e24a5cc',
     [string] $InstallDir = (Join-Path $env:LOCALAPPDATA 'AE'),
     [switch] $AddShortcut,

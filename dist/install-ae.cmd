@@ -11,7 +11,7 @@ rem  it applies to this one invocation only and changes no machine setting.
 rem ---------------------------------------------------------------------------
 setlocal
 set "HERE=%~dp0"
-set "REL=https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist"
+set "REL=https://github.com/SPORstudio-Official/moddelingmym/raw/main/dist"
 
 rem -AddShortcut by default: someone who clicked "install" wants it in the
 rem Start menu, not only running once.

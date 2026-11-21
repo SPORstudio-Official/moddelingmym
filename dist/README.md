@@ -2,7 +2,11 @@
 
 ### Install in one click
 
-**https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/download.html**
+**https://sporstudio-official.github.io/moddelingmym/**
+
+(GitHub serves a repository's `.html` file as `text/plain`, so opening the file
+on github.com shows its source instead of running it. The page above is served
+by GitHub Pages, which serves it as a page.)
 
 That page has the install button. The direct links, if you want them:
 
@@ -15,7 +19,7 @@ That page has the install button. The direct links, if you want them:
 One line, no download step:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/install-ae.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/main/dist/install-ae.ps1 | iex"
 ```
 
 Windows will say the publisher is unknown because the binary is not code-signed.
