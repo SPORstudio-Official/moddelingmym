@@ -117,6 +117,9 @@ static const char *const BR_START_PAGE =
     "<p><a href=\"aether://about\">aether://about</a> - this system's details</p>"
     "<p><a href=\"aether://files\">aether://files</a> - the virtual file system</p>"
     "<p><a href=\"aether://commands\">aether://commands</a> - shell reference</p>"
+    "<p><a href=\"aether://keys\">aether://keys</a> - keyboard shortcuts</p>"
+    "<p>The full documentation shelf is the <b>Ae64</b> folder in your home "
+    "directory - open Files and look for it.</p>"
     "</body></html>";
 
 static const char *br_local_page(const char *url) {
@@ -140,6 +143,39 @@ static const char *br_local_page(const char *url) {
             g_machine.host_os, g_machine.cpu_name);
         return buf;
     }
+    if (!kstrncmp(url, "aether://keys", 13)) {
+        /* The shortcut reference, generated from the same list the desktop
+           implements, so it cannot drift out of date unnoticed. */
+        static char keys[4096];
+        int n = ksnprintf(keys, sizeof(keys),
+            "<html><body><h1>Keyboard shortcuts</h1>"
+            "<p>These are the bindings this build actually implements.</p><hr>"
+            "<h3>Desktop</h3>"
+            "<p>T - open a terminal &nbsp; B - browser &nbsp; F - file manager</p>"
+            "<h3>Windows</h3>"
+            "<p>Alt+Tab / Alt+Shift+Tab - switch window</p>"
+            "<p>Alt+Q or Alt+F4 - close &nbsp; Alt+M - minimise</p>"
+            "<p>Alt+Enter - maximise or restore</p>"
+            "<p>Alt+Left / Alt+Right - snap to the left or right half</p>"
+            "<h3>Menus</h3>"
+            "<p>Right-click opens a context menu for what is under the pointer.</p>"
+            "<p>Up/Down move the highlight, Enter or Space activates, Escape dismisses.</p>"
+            "<p>Ctrl+Esc or the Windows key opens the Start menu.</p>"
+            "<h3>Shell</h3>"
+            "<p>Up/Down - history &nbsp; Tab - complete &nbsp; Ctrl+C - abandon line</p>"
+            "<p>Ctrl+L - clear screen &nbsp; Home/End - line ends</p>"
+            "<h3>Browser</h3>"
+            "<p>Enter - go or search &nbsp; Alt+Left / Alt+Right - back / forward</p>"
+            "<p>F5 - reload &nbsp; Tab - address bar</p>"
+            "<h3>System</h3>"
+            "<p>Ctrl+F1 - this page &nbsp; Ctrl+` - toggle scanlines</p>"
+            "<p>F4 - deliberately panic the kernel, to demonstrate the handler</p>"
+            "<hr><p>The same reference is on disk at "
+            "<b>/home/user/Ae64/keyboard.txt</b></p>"
+            "<p><a href=\"aether://\">start page</a></p></body></html>");
+        (void)n;
+        return keys;
+    }
     if (!kstrncmp(url, "aether://files", 14)) {
         static char listing[4096];
         int n = (int)kstrlen("<html><body><h1>The virtual file system</h1><p>"
@@ -150,7 +186,9 @@ static const char *br_local_page(const char *url) {
             static const char *const paths[] = {
                 "/", "/home", "/home/user", "/bin", "/etc", "/etc/motd",
                 "/var", "/var/log", "/boot", "/proc", "/proc/cpuinfo",
-                "/proc/meminfo", "/tmp", "/usr", "/usr/share"
+                "/proc/meminfo", "/tmp", "/usr", "/usr/share",
+                "/home/user/Ae64", "/home/user/Ae64/keyboard.txt",
+                "/home/user/Ae64/shell.txt", "/etc/desktop.cfg"
             };
             int i;
             for (i = 0; i < (int)(sizeof(paths) / sizeof(paths[0])); i++) {

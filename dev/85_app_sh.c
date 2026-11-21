@@ -117,7 +117,6 @@ static void sh_prompt(shell_t *sh) {
     const char *user = "user";
     ksnprintf(buf, sizeof(buf), "\x02%s@aether\x07:\x02%s\x07$ ", user, sh->cwd);
     sh_emit(sh, TC_DEFAULT, buf);
-    sh->nlines ? (sh->lines[sh->nlines - 1].is_prompt = 1) : 0;
     if (sh->nlines) sh->lines[sh->nlines - 1].is_prompt = 1;
 }
 
@@ -954,14 +953,129 @@ static void *shell_create(const char *arg) {
 }
 
 static void shell_destroy(void *state) { if (state) mm_kfree(state); }
+/* Tab completion -----------------------------------------------------------
+   The old implementation only compared the whole input line against the names
+   in the current directory, so "cat A" could never complete "Ae64/" and
+   "cd /home/us" never completed at all.  This version completes the *token*
+   under the caret: the text before the last '/' is treated as a directory
+   prefix, the remainder as the name fragment, and every match is listed when
+   the choice is ambiguous. */
+static void sh_complete(shell_t *sh) {
+    char token[TERM_CMD_LEN];
+    char dir[VFS_MAX_PATH];
+    const char *name;
+    int start = sh->cursor, n = 0, matches = 0, i, dircount;
+    char last[VFS_MAX_NAME + 2];
+
+    /* find the start of the token under the caret */
+    while (start > 0 && sh->input[start - 1] != ' ' && sh->input[start - 1] != '\t') start--;
+    kstrncpy(token, sh->input + start, (int)sizeof(token) - 1);
+    token[sh->cursor - start < (int)sizeof(token) ? sh->cursor - start : (int)sizeof(token) - 1] = 0;
+
+    /* split "some/dir/fra" into "some/dir" + "fra" */
+    {
+        char *slash = NULL;
+        char *q;
+        for (q = token; *q; q++) if (*q == '/') slash = q;
+        if (slash) {
+            size_t dl = (size_t)(slash - token);
+            if (dl == 0) { kstrcpy(dir, "/"); }
+            else {
+                if (dl >= sizeof(dir)) dl = sizeof(dir) - 1;
+                kmemcpy(dir, token, dl);
+                dir[dl] = 0;
+            }
+            name = slash + 1;
+        } else {
+            kstrcpy(dir, ".");
+            name = token;
+        }
+    }
+
+    dircount = vfs_dir_count(dir);
+    if (dircount < 0) return;
+    last[0] = 0;
+    for (i = 0; i < dircount; i++) {
+        vfs_dirent_t d;
+        if (vfs_dir_get(dir, i, &d) != 0) break;
+        if (!kstrcmp(d.name, ".") || !kstrcmp(d.name, "..")) continue;
+        n = (int)kstrlen(name);
+        if (n && kstrncmp(d.name, name, n)) continue;
+        kstrncpy(last, d.name, sizeof(last) - 2);
+        last[sizeof(last) - 2] = 0;
+        matches++;
+        if (matches > 1) break;
+    }
+    if (matches == 1) {
+        char add[VFS_MAX_NAME + 8];
+        char full[VFS_MAX_PATH];
+        int have = (int)kstrlen(name);
+        vfs_inode_t st;
+        int isdir = 0;
+        kmemset(&st, 0, sizeof(st));
+        ksnprintf(full, sizeof(full), "%s/%s", dir, last);
+        if (vfs_stat_path(full, &st) == 0) isdir = (st.type == FT_DIR);
+        /* Only the part that has not been typed yet is inserted: appending the
+           whole name produced "cd Ae6Ae64/" instead of "cd Ae64/". */
+        if (have > (int)kstrlen(last)) have = (int)kstrlen(last);
+        ksnprintf(add, sizeof(add), "%s%s", last + have, isdir ? "/" : "");
+        {
+            int addlen = (int)kstrlen(add);
+            int tail = sh->input_len - sh->cursor;
+            if (sh->cursor + addlen + tail < TERM_CMD_LEN - 2) {
+                kmemmove(sh->input + sh->cursor + addlen, sh->input + sh->cursor,
+                         (size_t)(tail + 1));
+                kmemcpy(sh->input + sh->cursor, add, (size_t)addlen);
+                sh->cursor += addlen;
+                sh->input_len += addlen;
+            }
+        }
+        return;
+    }
+    /* ambiguous or nothing: list what does match, then redraw the prompt */
+    if (matches > 1) {
+        char line[TERM_COLS * 2];
+        line[0] = 0;
+        for (i = 0; i < dircount; i++) {
+            vfs_dirent_t d;
+            n = (int)kstrlen(name);
+            if (vfs_dir_get(dir, i, &d) != 0) break;
+            if (!kstrcmp(d.name, ".") || !kstrcmp(d.name, "..")) continue;
+            if (n && kstrncmp(d.name, name, n)) continue;
+            if ((int)kstrlen(line) + (int)kstrlen(d.name) + 3 >= TERM_COLS) {
+                sh_emit(sh, TC_GREY, line);
+                sh_emit(sh, TC_GREY, "\n");
+                line[0] = 0;
+            }
+            kstrcat(line, d.name);
+            kstrcat(line, "  ");
+        }
+        if (line[0]) { sh_emit(sh, TC_GREY, line); sh_emit(sh, TC_GREY, "\n"); }
+    }
+}
+
+
+
+/* The prompt that is waiting for input is not scrollback: it is repainted from
+   scratch on every frame by shell_paint(), carrying the current input text and
+   the caret.  Counting it as a scrollback line drew it twice. */
+static int last_line_is_prompt(shell_t *sh) {
+    return sh->nlines > 0 && sh->lines[sh->nlines - 1].is_prompt;
+}
 
 static void shell_paint(void *state, window_t *w, wm_rect_t client) {
     shell_t *sh = (shell_t *)state;
     theme_t *t = theme_get();
     int rows = (client.h - 18) / FONT_TERM_H;
-    int first = sh->nlines - rows - sh->scroll;
-    int i;
+    int live = last_line_is_prompt(sh);
+    int count = sh->nlines - live;
+    int first, i;
     if (rows < 1) rows = 1;
+    /* The trailing empty prompt line is drawn as the live input line below, so
+       it must not also be painted into the scrollback.  It used to be, which put
+       two identical prompts on screen as soon as a command produced enough
+       output to scroll the buffer. */
+    first = count - rows - sh->scroll;
     if (first < 0) first = 0;
 
     gfx_fill_rect(client.x, client.y, client.w, client.h, RGBA(8, 12, 18, 252));
@@ -972,7 +1086,7 @@ static void shell_paint(void *state, window_t *w, wm_rect_t client) {
         int li = first + i;
         int y = client.y + 6 + i * FONT_TERM_H;
         u32 col = t->text;
-        if (li >= sh->nlines) break;
+        if (li >= count) break;
         switch (sh->lines[li].color) {
         case TC_GREEN: col = t->ok; break;
         case TC_CYAN: col = t->info; break;
@@ -1019,7 +1133,7 @@ static void shell_paint(void *state, window_t *w, wm_rect_t client) {
     /* scrollbar */
     {
         int sbx = client.x + client.w - 8;
-        int total = sh->nlines + 1;
+        int total = count + 1;
         int thumb = k_max(20, client.h * rows / k_max(total, 1));
         int pos = (int)((long)(client.h - thumb) * sh->scroll / k_max(1, total - rows));
         gfx_fill_rect(sbx, client.y, 8, client.h, RGBA(0, 0, 0, 90));
@@ -1092,26 +1206,10 @@ static void shell_key(void *state, int key, int ch, int mods) {
         }
         return;
     }
-    if (key == 0x21) { sh->scroll = k_min(sh->scroll + 4, k_max(0, sh->nlines)); return; }
+    if (key == 0x21) { sh->scroll = k_min(sh->scroll + 4, k_max(0, sh->nlines - 1)); return; }
     if (key == 0x22) { sh->scroll = k_max(0, sh->scroll - 4); return; }
     if (key == 0x09) {                                  /* tab completion */
-        int i, n = vfs_dir_count(".");
-        int matches = 0;
-        char last[TERM_CMD_LEN];
-        for (i = 0; i < n; i++) {
-            vfs_dirent_t d;
-            if (vfs_dir_get(".", i, &d) != 0) break;
-            if (!kstrncmp(d.name, sh->input, kstrlen(sh->input)) && kstrlen(sh->input)) {
-                kstrncpy(last, d.name, TERM_CMD_LEN - 1);
-                matches++;
-            }
-        }
-        if (matches == 1) {
-            kstrcpy(sh->input, last);
-            if (vfs_dir_count(last) >= 0) kstrcat(sh->input, "/");
-            sh->input_len = (int)kstrlen(sh->input);
-            sh->cursor = sh->input_len;
-        }
+        sh_complete(sh);
         return;
     }
     if (key == 0x1B) { sh->input[0] = 0; sh->input_len = 0; sh->cursor = 0; return; }
@@ -1162,7 +1260,7 @@ static void shell_mouse(void *state, int event, int x, int y, int button, int wh
     shell_t *sh = (shell_t *)state;
     (void)x; (void)y; (void)button;
     if (event == APP_EV_WHEEL) {
-        sh->scroll = k_clamp(sh->scroll + wheel * 3, 0, k_max(0, sh->nlines));
+        sh->scroll = k_clamp(sh->scroll + wheel * 3, 0, k_max(0, sh->nlines - 1));
     } else if (event == APP_EV_MOUSE_DOWN) {
         sh->scroll = 0;
     }

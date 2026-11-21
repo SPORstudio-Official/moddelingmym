@@ -1665,12 +1665,24 @@ void wm_on_mouse_down(int x, int y, int button) {
         case HIT_BTN_MIN: wm_minimize(w->id); return;
         case HIT_BTN_MAX: wm_maximize(w->id); return;
         case HIT_BTN_CLOSE: wm_close_window(w->id); return;
-        case HIT_TITLE:
+        case HIT_TITLE: {
+            /* Double-clicking the title bar maximizes (and restores again),
+               the same gesture every other desktop uses.  It has to be tested
+               before the drag is armed: pressing twice on a title bar that
+               never moves is exactly what a double-click looks like. */
+            u32 now = now_ms();
+            if (wm_is_double_click(-w->id, x, y, now)) {
+                g_wm.last_click_id = 0;
+                wm_maximize(w->id);
+                return;
+            }
+            wm_remember_click(-w->id, x, y, now);
             g_wm.drag_mode = 1;
             g_wm.drag_id = w->id;
             g_wm.drag_dx = x - w->frame.x;
             g_wm.drag_dy = y - w->frame.y;
             return;
+        }
         case HIT_RESIZE_L: case HIT_RESIZE_R: case HIT_RESIZE_T: case HIT_RESIZE_B:
         case HIT_RESIZE_TL: case HIT_RESIZE_TR: case HIT_RESIZE_BL: case HIT_RESIZE_BR:
             g_wm.drag_mode = 2;
