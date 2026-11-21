@@ -46,6 +46,8 @@
 #  include <windows.h>
 #  include <windowsx.h>       /* GET_X_LPARAM / GET_Y_LPARAM                */
 #  include <mmsystem.h>       /* timeBeginPeriod / timeEndPeriod            */
+#  include <shellapi.h>       /* ShellExecuteA for hal_open_external        */
+#  include <winhttp.h>        /* the OS fetches pages itself, no browser    */
 /* The Win32 headers define macros whose names collide with kernel vocabulary.
    Nothing in AE uses the Win32 meaning, and leaving them defined breaks
    the syscall enum and the modifier bitmask, so they are removed here. */
@@ -82,6 +84,11 @@ __attribute__((import_module("env"), import_name("js_now_us")))
 u64 js_now_us(void);
 __attribute__((import_module("env"), import_name("js_present")))
 void js_present(void);
+/* Present only a damaged rectangle.  The host uploads the rows in [y, y+h) of
+   [x, x+w) instead of the whole 3.5 MB surface, which is what makes the
+   browser build cheap when only a pointer-sized region changed. */
+__attribute__((import_module("env"), import_name("js_present_rect")))
+void js_present_rect(int x, int y, int w, int h);
 __attribute__((import_module("env"), import_name("js_poll_event")))
 int js_poll_event(void *out);          /* writes 40 bytes -> 1 if an event    */
 __attribute__((import_module("env"), import_name("js_wallclock")))
@@ -109,10 +116,7 @@ void js_request_quit(void);
  *  Buffers are owned by the host and released by js_http_release().  The cap
  *  keeps a huge page from exhausting the module's linear memory.
  * ---------------------------------------------------------------------- */
-/* A modern article page is routinely 300-800 KB of HTML before any script runs,
-   and the old 512 KB ceiling truncated the biggest ones.  The reader keeps up to
-   HTML_TEXT_MAX (2 MB) of text; this is the transfer budget above that. */
-#define AETHER_HTTP_MAX_BODY (2 * 1024 * 1024)
+
 __attribute__((import_module("env"), import_name("js_http_get")))
 int  js_http_get(const char *url);
 __attribute__((import_module("env"), import_name("js_http_state")))
@@ -170,6 +174,12 @@ void hal_open_external(const char *url);
  * -------------------------------------------------------------------------- */
 #define LOG_BUF_SIZE (64 * 1024)
 
+/* A modern article page is routinely 300-800 KB of HTML before any script runs,
+   and an older 512 KB ceiling truncated the biggest ones.  The reader keeps up
+   to HTML_TEXT_MAX (2 MB) of text; this is the transfer budget above that.  It
+   lives here because every chassis honours it, not just the wasm one. */
+#define AETHER_HTTP_MAX_BODY (2 * 1024 * 1024)
+
 /* Networking (20_hal.c).  net_fetch downloads a URL into dst, NUL-terminates it
    and returns the byte count, or a negative NET_ERR_* code. */
 enum {
@@ -183,9 +193,54 @@ int net_available(void);
 int net_fetch(const char *url, char *dst, int cap);
 /* Non-blocking form used by the browser: start, poll each frame, finish. */
 int net_begin(const char *url);
+/* POST form, needed for JSON-RPC (the MCP search backend).  ctype/body are
+   borrowed until the request finishes. */
+int net_begin_post(const char *url, const char *ctype, const char *body);
+/* Full form: method, content type, body and extra request headers.  All strings
+   are borrowed until the request finishes. */
+int net_begin_full(const char *url, const char *method, const char *ctype,
+                   const char *body, const char *hdrs);
+/* Response headers of a finished request (used for the MCP session id). */
+int net_headers(int slot, char *dst, int cap);
+
+/* MCP search back end (76_mcp.c).  A search is a JSON-RPC POST to a keyless
+   hosted MCP server; the browser calls the three-stage form so the frame loop
+   never blocks on the network. */
+typedef struct {
+    char title[96];
+    char url[256];
+    char snippet[224];
+} mcp_hit_t;
+
+int  mcp_available(void);
+void mcp_init(void);
+int  mcp_search(const char *query);
+int  mcp_poll(void);
+int  mcp_finish(void);
+int  mcp_hits(void);
+const mcp_hit_t *mcp_hit(int i);
+int  mcp_busy(void);
+const char *mcp_note(void);
+const char *mcp_query(void);
+int  mcp_daily_limit(void);
+int  mcp_is_search(const char *s);
 int net_poll(int slot);
 int net_finish(int slot, char *dst, int cap);
 void net_abort(int slot);
+
+/* --------------------------------------------------------------------------
+ *  Compositor handoff (40_gfx.c, 80_wm.c, 95_main.c)
+ *
+ *  The WM decides each frame which rectangle of the framebuffer it had to
+ *  regenerate; the frame loop presents exactly that rect, and the chassis
+ *  restores the pointer sprite's pixels before the rect is painted again.
+ * -------------------------------------------------------------------------- */
+typedef struct { int x, y, w, h; } wm_rect_t;   /* must match 80_wm.c exactly  */
+void wm_damage_all(void);
+void wm_cursor_presented(void);
+wm_rect_t wm_last_damage(void);
+void gfx_cursor_restore(void);
+void hal_present(int x, int y, int w, int h);
 
 /* --------------------------------------------------------------------------
  *  Colors (0xAARRGGBB, straight alpha)

@@ -216,11 +216,21 @@ static void panic_render(u32 elapsed) {
 
 static u32 g_frame_no;
 
+/* Publish only what the compositor regenerated this frame.  The WM keeps the
+   damaged rect in g_damage (in 80_wm.c); the boot and panic screens repaint the
+   whole screen, so they ask for a full present instead. */
+void hal_present(int x, int y, int w, int h);
+
 static void present_dirty_region(void) {
-    static int last_x0, last_y0, last_x1, last_y1, have_last;
+    wm_rect_t d = wm_last_damage();
+    if (d.w <= 0 || d.h <= 0) { hal_frame_boundary(++g_frame_no); return; }
+    hal_present(d.x, d.y, d.w, d.h);
+    hal_frame_boundary(++g_frame_no);
+}
+
+static void present_full(void) {
     hal_present(0, 0, SCREEN_W, SCREEN_H);
     hal_frame_boundary(++g_frame_no);
-    (void)last_x0; (void)last_y0; (void)last_x1; (void)last_y1; (void)have_last;
 }
 
 static void handle_global_hotkeys(int key, int ch, int mods) {
@@ -297,6 +307,12 @@ int aether_boot(int argc, char **argv) {
  * ------------------------------------------------------------------------ */
 static int g_reboot_pending;
 
+/* The compositor tracks its own damage; the HAL needs to know whether the
+   pointer sprite is currently part of the framebuffer so it can be lifted
+   before the next partial repaint.  Declared here rather than in the prelude
+   because it is inside the WM. */
+void wm_cursor_presented(void);
+
 int aether_frame(void) {
     hal_event_t ev;
     u64 now;
@@ -313,7 +329,7 @@ int aether_frame(void) {
         g_reboot_pending = 0;
         klog("kernel: reboot requested, restarting the kernel subsystems");
         gfx_clear(RGB(0, 0, 0));
-        present_dirty_region();
+        present_full();
         wm_shutdown();
         proc_init();
         cc_init();
@@ -435,7 +451,7 @@ int aether_frame(void) {
     if (g_boot_stage == 1) {
         u32 elapsed = now_ms() - g_boot_start_ms;
         boot_render(elapsed);
-        present_dirty_region();
+        present_full();
         if (elapsed > 2650) {
             g_boot_stage = 2;
             {
@@ -450,7 +466,7 @@ int aether_frame(void) {
     /* panic phase */
     if (g_panic_active) {
         panic_render(now_ms() - g_panic_ms);
-        present_dirty_region();
+        present_full();
         return hal_running();
     }
 

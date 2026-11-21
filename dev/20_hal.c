@@ -16,6 +16,12 @@
 /* 40_gfx.c draws the software pointer; the HAL composites it as the final step
    of a present so it never dirties the layers underneath. */
 void gfx_composite_cursor(void);
+void gfx_cursor_restore(void);
+/* Allocator, declared here because the Win32 network chassis needs it before
+   50_mm.c is concatenated.  The signatures must match 50_mm.c exactly (kfree
+   returns int there, and the bytecode VM uses that return value). */
+void *mm_kmalloc(u32 size);
+int   mm_kfree(void *p);
 
 typedef struct {
     int  type;          /* HAL_EV_*                                            */
@@ -150,15 +156,16 @@ void hal_open_external(const char *url) { js_open_external(url); }
 void hal_sleep_ms(int ms) { (void)ms; }
 
 /* Presentation is a single call into the shell, which copies the framebuffer
-   into an ImageData and paints it.  The rect arguments are ignored: the host
-   always blits the whole 1280x720 surface. */
+   into the canvas.  The damaged rect is passed through so the shell can upload
+   only the rows that changed -- copying the whole 3.5 MB surface every frame was
+   the single most expensive thing the browser build did. */
 void hal_present(int x, int y, int w, int h) {
-    (void)x; (void)y; (void)w; (void)h;
     gfx_composite_cursor();    /* the pointer is the last thing on the screen */
-    js_present();
+    wm_cursor_presented();
+    js_present_rect(x, y, w, h);
 }
 
-void hal_flush_all(void) { gfx_composite_cursor(); js_present(); }
+void hal_flush_all(void) { gfx_composite_cursor(); wm_cursor_presented(); js_present(); }
 void hal_frame_boundary(u32 frame) { (void)frame; }
 
 /* The desktop draws its own software pointer, so the host pointer stays put. */
@@ -249,6 +256,7 @@ void hal_frame_boundary(u32 frame) {
         if ((u32)g_dump_frame[i] == frame) {
             g_dump_frame[i] = -1;
             gfx_composite_cursor();
+            wm_cursor_presented();
             hal_dump_ppm(g_dump_path[i]);
         }
     }
@@ -528,18 +536,21 @@ static void hal_create_backbuffer(void) {
     ReleaseDC(g_hwnd, wnddc);
 }
 
+/* Only the rect the compositor damaged is copied to the window each frame.  A
+   full framebuffer copy is 3.5 MB of video traffic per frame; with the pointer
+   parked, a frame that changed nothing now moves nothing at all. */
 void hal_present(int x, int y, int w, int h) {
     HDC dc;
     if (!g_hwnd || !g_memdc || !g_vram) return;
-    dc = GetDC(g_hwnd);
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > SCREEN_W) w = SCREEN_W - x;
     if (y + h > SCREEN_H) h = SCREEN_H - y;
-    if (w > 0 && h > 0) {
-        gfx_composite_cursor();
-        BitBlt(dc, x, y, w, h, g_memdc, x, y, SRCCOPY);
-    }
+    if (w <= 0 || h <= 0) return;
+    gfx_composite_cursor();
+    wm_cursor_presented();
+    dc = GetDC(g_hwnd);
+    BitBlt(dc, x, y, w, h, g_memdc, x, y, SRCCOPY);
     ReleaseDC(g_hwnd, dc);
 }
 
@@ -788,24 +799,49 @@ int hal_poll_event(hal_event_t *ev) {
 /*  Networking                                                               */
 /*                                                                            */
 /*  A kernel module asks the chassis for bytes; how they are obtained is the   */
-/*  chassis' problem.  Only the WebAssembly shell has a network (the host      */
-/*  performs the request), so the Win32 and headless back ends report           */
-/*  NET_ERR_UNSUPPORTED and callers fall back to local content.                */
+/*  chassis' problem.  Each platform supplies the same four calls plus the      */
+/*  blocking wrapper:                                                          */
+/*                                                                            */
+/*      slot = net_begin(url)      start a request, returns a slot id          */
+/*      net_poll(slot)             0 pending, 1 ready, <0 NET_ERR_*            */
+/*      net_finish(slot, dst, cap) copy the body out and release the slot      */
+/*      net_abort(slot)            give up on a slot                            */
+/*                                                                            */
+/*  Asynchronous by design: on Win32 the request runs on its own thread so the  */
+/*  UI keeps compositing (the frame loop must never block on a socket), and on  */
+/*  wasm the *host* performs the fetch.  The headless CI build has no network. */
 /* -------------------------------------------------------------------------- */
 
 int net_available(void) {
-#ifdef AETHER_WASM
+#if defined(AETHER_WASM) || defined(AETHER_ON_WIN32)
     return 1;
 #else
     return 0;
 #endif
 }
 
-#ifdef AETHER_WASM
+#if defined(AETHER_WASM)
+
 /* Start a request.  Returns a slot id, or NET_ERR_*.  Deliberately does NOT
  * wait: the wasm module shares a thread with the shell's UI, so blocking here
  * would freeze the window for as long as the network took.  Callers poll. */
 int net_begin(const char *url) {
+    return js_http_get(url);
+}
+
+/* The browser host implements GET only (fetch() with no options), so the POST
+ * form reports itself unavailable rather than sending a body-less request that
+ * the search server would reject.  The Win32 image is the chassis that can do
+ * JSON-RPC; see the AETHER_ON_WIN32 branch below. */
+int net_begin_post(const char *url, const char *ct, const char *b) {
+    (void)url; (void)ct; (void)b;
+    return NET_ERR_UNSUPPORTED;
+}
+
+int net_begin_full(const char *url, const char *method, const char *ctype,
+                   const char *body, const char *hdrs) {
+    (void)method; (void)ctype; (void)hdrs;
+    if (body && *body) return NET_ERR_UNSUPPORTED;
     return js_http_get(url);
 }
 
@@ -838,14 +874,395 @@ int net_finish(int slot, char *dst, int cap) {
     return take;
 }
 
+/* The WebAssembly chassis keeps no response headers: its fetch() wrapper only
+ * surfaces the body.  MCP over the browser therefore reports no session id and
+ * the server treats each call as a fresh one, which is allowed. */
+int net_headers(int slot, char *dst, int cap) {
+    (void)slot;
+    if (dst && cap > 0) dst[0] = 0;
+    return 0;
+}
+
 void net_abort(int slot) { js_http_release(slot); }
+
+#elif defined(AETHER_ON_WIN32)
+
+/* --------------------------------------------------------------------------
+ *  Win32 network chassis -- real HTTP, no browser involved
+ *
+ *  WinHTTP ships with every supported Windows version, so the OS can fetch a
+ *  page with nothing installed.  The one rule the frame loop depends on is that
+ *  a request must never block it, so each request runs on its own thread:
+ *
+ *      net_begin   starts the worker and returns the slot immediately
+ *      worker      opens the session, follows redirects, reads the body
+ *      net_poll    reports the worker's state (lock-free: two volatile words)
+ *      net_finish  copies the body out and joins the thread
+ *
+ *  TLS is verified against the system root store (the default) -- the proxies
+ *  the browser falls back to are ordinary HTTPS endpoints, nothing special is
+ *  needed.
+ * ------------------------------------------------------------------------ */
+#define NET_MAX_SLOTS 6
+#define NET_MAX_REDIRECTS 6
+
+typedef struct {
+    int  used;
+    volatile int state;        /* 0 pending, 1 ready, 2 failed            */
+    volatile int status;       /* HTTP status code when ready             */
+    int  len;                  /* body length, valid when ready           */
+    char *body;                /* kmalloc'd body, freed by finish/abort   */
+    volatile int refs;         /* worker still running?                   */
+    HANDLE thread;
+    char url[1024];
+    /* POST support: an MCP search is a JSON-RPC call, so the chassis needs to
+       send a body and a content type, not just GET a URL.  NULL method means
+       GET, which keeps every existing caller unchanged. */
+    const char *method;
+    const char *ctype;
+    const char *req_body;
+    const char *hdrs;          /* extra request headers, "Name: value\r\n"... */
+    char        rhdr[768];     /* raw response headers, CRLF separated         */
+} net_slot_t;
+
+static net_slot_t g_net[NET_MAX_SLOTS];
+static CRITICAL_SECTION g_net_lock;
+static int g_net_lock_ready;
+
+static void net_lock_init(void) {
+    if (!g_net_lock_ready) { InitializeCriticalSection(&g_net_lock); g_net_lock_ready = 1; }
+}
+
+/* Fetch one URL into a fresh buffer.  Returns the byte count, or NET_ERR_*.
+ *
+ * Kept out of line and with a small frame: on Win64 any function whose frame
+ * exceeds 4 KB needs a stack probe (___chkstk_ms), and the freestanding kernel
+ * link has no provider for it.  The big buffers this routine needs are
+ * therefore file scope, not automatic. */
+static wchar_t g_net_wurl[1200];
+static wchar_t g_net_whost[300];
+static wchar_t g_net_wpath[2100];
+static wchar_t g_net_wloc[2048];
+static wchar_t g_net_whdr[512];
+static wchar_t g_net_whdr2[900];
+static wchar_t g_net_wraw[768];
+static CRITICAL_SECTION g_fetch_lock;
+static int g_fetch_lock_ready;
+static char    g_net_next[1024];
+static char    g_net_tmp[1024];
+
+static int winhttp_fetch_inner(const char *url, const char *method, const char *ctype,
+                               const char *req_body, const char *hdrs,
+                               char *rhdr, int rhcap, char **out_body);
+
+/* The URL, host, path and location buffers this routine needs are file scope (a
+ * large stack frame needs ___chkstk_ms, which the freestanding link has no
+ * provider for).  File scope plus six worker threads means two requests in
+ * flight at once would overwrite each other mid-parse, so fetches take turns:
+ * the UI thread still never blocks, only the workers queue. */
+static int winhttp_fetch(const char *url, const char *method, const char *ctype,
+                         const char *req_body, const char *hdrs,
+                         char *rhdr, int rhcap, char **out_body) {
+    int rc;
+    if (!g_fetch_lock_ready) { InitializeCriticalSection(&g_fetch_lock); g_fetch_lock_ready = 1; }
+    EnterCriticalSection(&g_fetch_lock);
+    rc = winhttp_fetch_inner(url, method, ctype, req_body, hdrs, rhdr, rhcap, out_body);
+    LeaveCriticalSection(&g_fetch_lock);
+    return rc;
+}
+
+static int winhttp_fetch_inner(const char *url, const char *method, const char *ctype,
+                               const char *req_body, const char *hdrs,
+                               char *rhdr, int rhcap, char **out_body) {
+    HINTERNET session = NULL, conn = NULL, req = NULL;
+    URL_COMPONENTS uc;
+    wchar_t *wurl = g_net_wurl, *whost = g_net_whost, *wpath = g_net_wpath;
+    int redirects = 0;
+    int i;
+
+    *out_body = NULL;
+    if (!url || !*url) return NET_ERR_IO;
+
+    for (;;) {
+        DWORD status = 0, sz;
+        if (redirects++ > NET_MAX_REDIRECTS) return NET_ERR_IO;
+
+        for (i = 0; url[i] && i < 1199; i++) wurl[i] = (wchar_t)(unsigned char)url[i];
+        wurl[i] = 0;
+
+        /* Crack the URL as wide text -- URL_COMPONENTS is a wide-character
+           structure, so the narrow buffer must be converted first. */
+        kmemset(&uc, 0, sizeof(uc));
+        uc.dwStructSize = sizeof(uc);
+        uc.lpszScheme = whost;   uc.dwSchemeLength = 15;      /* reuse the buffer */
+        uc.lpszHostName = whost; uc.dwHostNameLength = 299;
+        uc.lpszUrlPath = wpath;  uc.dwUrlPathLength = 2099;
+        if (!WinHttpCrackUrl(wurl, 0, 0, &uc)) return NET_ERR_IO;
+
+        session = WinHttpOpen(L"AE/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!session) return NET_ERR_IO;
+
+        {
+            /* CrackUrl wrote the host into whost starting at offset 0 only if
+               scheme came first; copy the components out explicitly instead. */
+            int k = 0;
+            for (i = 0; i < (int)uc.dwHostNameLength && k < 299; i++) whost[k++] = wurl[(int)(uc.lpszHostName - wurl) + i];
+            whost[k] = 0;
+        }
+        conn = WinHttpConnect(session, whost, uc.nPort, 0);
+        if (!conn) { WinHttpCloseHandle(session); return NET_ERR_IO; }
+
+        {
+            int n = 0;
+            if (uc.dwUrlPathLength == 0) { wpath[n++] = L'/'; }
+            else
+                for (i = 0; i < (int)uc.dwUrlPathLength && n < 2090; i++)
+                    wpath[n++] = wurl[(int)(uc.lpszUrlPath - wurl) + i];
+            wpath[n] = 0;
+            if (wpath[0] != L'/') {
+                int m;
+                for (m = n; m > 0; m--) wpath[m] = wpath[m - 1];
+                wpath[0] = L'/';
+            }
+        }
+
+        req = WinHttpOpenRequest(conn,
+                                 (method && method[0] == 'P') ? L"POST" : L"GET",
+                                 wpath, NULL, WINHTTP_NO_REFERER,
+                                 WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                 (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0);
+        if (!req) { WinHttpCloseHandle(conn); WinHttpCloseHandle(session); return NET_ERR_IO; }
+
+        WinHttpSetTimeouts(req, 8000, 8000, 12000, 30000);
+        {
+            /* A JSON-RPC call needs both a body and a content type.  The header
+               and body buffers are wide/byte respectively; WinHTTP takes the
+               request body as raw bytes and its length in bytes. */
+            wchar_t *whdr = g_net_whdr2;
+            const char *body = req_body ? req_body : "";
+            int hlen = 0, i;
+            int blen = (int)kstrlen(body);
+            if (ctype && ctype[0]) {
+                static const wchar_t ct[] = L"Content-Type: ";
+                for (i = 0; ct[i]; i++) whdr[hlen++] = ct[i];
+                for (i = 0; ctype[i] && hlen < 200; i++) whdr[hlen++] = (wchar_t)(unsigned char)ctype[i];
+                whdr[hlen++] = L'\r'; whdr[hlen++] = L'\n';
+            }
+            /* MCP streams replies as server-sent events unless the client also
+               advertises JSON, so ask for both and accept either. */
+            if (hdrs) {
+                for (i = 0; hdrs[i] && hlen < 620; i++) {
+                    whdr[hlen++] = (hdrs[i] == '\n') ? L'\n' : (wchar_t)(unsigned char)hdrs[i];
+                }
+            }
+            whdr[hlen] = 0;
+            if (!WinHttpSendRequest(req,
+                                    hlen ? whdr : WINHTTP_NO_ADDITIONAL_HEADERS,
+                                    hlen ? (DWORD)-1L : 0,
+                                    blen ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA,
+                                    (DWORD)blen, (DWORD)blen, 0) ||
+                !WinHttpReceiveResponse(req, NULL)) {
+                WinHttpCloseHandle(req); WinHttpCloseHandle(conn); WinHttpCloseHandle(session);
+                return NET_ERR_IO;
+            }
+        }
+
+        /* Keep the response headers: MCP hands back its session id there, and
+           without it the follow-up tools/call is rejected. */
+        if (rhdr && rhcap > 1) {
+            DWORD rsz = (DWORD)sizeof(g_net_wraw);
+            if (WinHttpQueryHeaders(req, WINHTTP_QUERY_RAW_HEADERS_CRLF,
+                                    WINHTTP_HEADER_NAME_BY_INDEX,
+                                    g_net_wraw, &rsz, WINHTTP_NO_HEADER_INDEX)) {
+                int k = 0;
+                const wchar_t *wp2 = g_net_wraw;
+                while (wp2[k] && k < rhcap - 1) { rhdr[k] = (char)wp2[k]; k++; }
+                rhdr[k] = 0;
+            } else rhdr[0] = 0;
+        }
+
+        sz = sizeof(status);
+        WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
+
+        /* Follow redirects here rather than relying on the automatic policy: the
+           reader proxies redirect on purpose and a cross-host hop must work. */
+        if (status >= 300 && status < 400) {
+            wchar_t *wloc = g_net_wloc;
+            DWORD lsz = sizeof(g_net_wloc);
+            if (WinHttpQueryHeaders(req, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
+                                    wloc, &lsz, WINHTTP_NO_HEADER_INDEX) && lsz > 2) {
+                char *next = g_net_next;
+                int k = 0, rc;
+                for (i = 0; wloc[i] && k < 1023; i++) next[k++] = (char)wloc[i];
+                next[k] = 0;
+                WinHttpCloseHandle(req); WinHttpCloseHandle(conn); WinHttpCloseHandle(session);
+                kstrncpy(g_net_tmp, next, sizeof(g_net_tmp) - 1);
+                g_net_tmp[sizeof(g_net_tmp) - 1] = 0;
+                url = g_net_tmp;
+                req = NULL; conn = NULL; session = NULL;
+                /* loop again with the new location */
+                {
+                    char *copy = (char *)mm_kmalloc((u32)kstrlen(url) + 1);
+                    if (!copy) return NET_ERR_IO;
+                    kstrcpy(copy, url);
+                    rc = winhttp_fetch_inner(copy, method, ctype, req_body, hdrs, rhdr, rhcap, out_body);
+                    mm_kfree(copy);
+                    return rc;
+                }
+            }
+        }
+        if (status < 200 || status >= 300) {
+            WinHttpCloseHandle(req); WinHttpCloseHandle(conn); WinHttpCloseHandle(session);
+            return NET_ERR_IO;
+        }
+
+        /* Read the whole body, up to the transfer cap. */
+        {
+            char *buf = NULL;
+            int cap = 0, len = 0, result = NET_ERR_IO;
+            for (;;) {
+                DWORD avail = 0, got = 0;
+                if (!WinHttpQueryDataAvailable(req, &avail)) break;
+                if (avail == 0) { result = len; break; }
+                if (len >= AETHER_HTTP_MAX_BODY) { result = len; break; }
+                if (len + (int)avail + 1 > cap) {
+                    int ncap = cap ? cap : 65536;
+                    char *nb;
+                    while (ncap < len + (int)avail + 1) ncap *= 2;
+                    if (ncap > AETHER_HTTP_MAX_BODY + 1) ncap = AETHER_HTTP_MAX_BODY + 1;
+                    nb = (char *)mm_kmalloc((u32)ncap);
+                    if (!nb) break;
+                    if (buf) { kmemcpy(nb, buf, (size_t)len); mm_kfree(buf); }
+                    buf = nb;
+                    cap = ncap;
+                }
+                if (!WinHttpReadData(req, buf + len, avail, &got) || got == 0) break;
+                len += (int)got;
+            }
+            if (buf) { buf[len] = 0; *out_body = buf; result = len; }
+            WinHttpCloseHandle(req); WinHttpCloseHandle(conn); WinHttpCloseHandle(session);
+            return result;
+        }
+    }
+}
+
+static DWORD WINAPI net_worker(LPVOID arg) {
+    net_slot_t *s = (net_slot_t *)arg;
+    char *body = NULL;
+    int n = winhttp_fetch(s->url, s->method, s->ctype, s->req_body, s->hdrs,
+                          s->rhdr, (int)sizeof(s->rhdr), &body);
+    if (n >= 0) {
+        s->body = body;
+        s->len = n;
+        s->state = 1;
+    } else {
+        s->state = 2;
+    }
+    return 0;
+}
+
+int net_begin(const char *url) { return net_begin_full(url, "GET", NULL, NULL, NULL); }
+
+/* Start a POST (used for JSON-RPC, i.e. MCP).  The three strings are borrowed
+ * for the lifetime of the request, so callers pass buffers that outlive it --
+ * the browser keeps them in its own state for exactly this reason. */
+int net_begin_post(const char *url, const char *ctype, const char *body) {
+    return net_begin_full(url, "POST", ctype, body, NULL);
+}
+
+int net_begin_full(const char *url, const char *method, const char *ctype,
+                   const char *body, const char *hdrs) {
+    int i;
+    net_lock_init();
+    if (!url || !*url) return NET_ERR_IO;
+    EnterCriticalSection(&g_net_lock);
+    for (i = 0; i < NET_MAX_SLOTS; i++) {
+        if (!g_net[i].used) {
+            net_slot_t *s = &g_net[i];
+            kmemset(s, 0, sizeof(*s));
+            s->used = 1;
+            kstrncpy(s->url, url, sizeof(s->url) - 1);
+            s->method = method ? method : "GET";
+            s->ctype = ctype;
+            s->req_body = body;
+            s->hdrs = hdrs;
+            s->thread = CreateThread(NULL, 0, net_worker, s, 0, NULL);
+            if (!s->thread) { s->used = 0; i = NET_MAX_SLOTS; break; }
+            LeaveCriticalSection(&g_net_lock);
+            return i;
+        }
+    }
+    LeaveCriticalSection(&g_net_lock);
+    return NET_ERR_IO;
+}
+
+int net_poll(int slot) {
+    if (slot < 0 || slot >= NET_MAX_SLOTS || !g_net[slot].used) return NET_ERR_IO;
+    if (g_net[slot].state == 0) return 0;
+    if (g_net[slot].state == 2) return NET_ERR_IO;
+    return 1;
+}
+
+int net_finish(int slot, char *dst, int cap) {
+    net_slot_t *s;
+    int take;
+    if (slot < 0 || slot >= NET_MAX_SLOTS || !g_net[slot].used) return NET_ERR_IO;
+    s = &g_net[slot];
+    if (s->thread) { WaitForSingleObject(s->thread, 1000); CloseHandle(s->thread); s->thread = NULL; }
+    if (s->state != 1 || !s->body) { net_abort(slot); return NET_ERR_IO; }
+    take = s->len;
+    if (take > cap - 1) take = cap - 1;
+    kmemcpy(dst, s->body, (size_t)take);
+    dst[take] = 0;
+    mm_kfree(s->body);
+    s->body = NULL;
+    s->used = 0;
+    return take;
+}
+
+void net_abort(int slot) {
+    if (slot < 0 || slot >= NET_MAX_SLOTS) return;
+    {
+        net_slot_t *s = &g_net[slot];
+        if (s->thread) { WaitForSingleObject(s->thread, 1000); CloseHandle(s->thread); s->thread = NULL; }
+        if (s->body) { mm_kfree(s->body); s->body = NULL; }
+        s->used = 0;
+    }
+}
+
+/* Copy the response headers of a finished request.  The MCP client needs the
+ * Mcp-Session-Id from handshake to authorise the tools/call that follows;
+ * ordinary page fetches ignore headers entirely. */
+int net_headers(int slot, char *dst, int cap) {
+    int n;
+    if (slot < 0 || slot >= NET_MAX_SLOTS || !dst || cap <= 0) return -1;
+    n = (int)kstrlen(g_net[slot].rhdr);
+    if (n > cap - 1) n = cap - 1;
+    kmemcpy(dst, g_net[slot].rhdr, (size_t)n);
+    dst[n] = 0;
+    return n;
+}
+
+#else   /* headless: no network in the CI chassis */
+
+int net_begin(const char *url) { (void)url; return NET_ERR_UNSUPPORTED; }
+int net_begin_post(const char *url, const char *ct, const char *b) { (void)url; (void)ct; (void)b; return NET_ERR_UNSUPPORTED; }
+int net_begin_full(const char *u, const char *m, const char *ct, const char *b, const char *h) { (void)u; (void)m; (void)ct; (void)b; (void)h; return NET_ERR_UNSUPPORTED; }
+int net_poll(int slot) { (void)slot; return NET_ERR_UNSUPPORTED; }
+int net_finish(int slot, char *dst, int cap) { (void)slot; (void)dst; (void)cap; return NET_ERR_UNSUPPORTED; }
+void net_abort(int slot) { (void)slot; }
+int net_headers(int slot, char *dst, int cap) { (void)slot; if (dst && cap) dst[0] = 0; return 0; }
+
+#endif
 
 /* Blocking convenience wrapper.  Only safe before the frame loop is running
  * (i.e. during boot); the browser app uses the three-call form instead. */
 int net_fetch(const char *url, char *dst, int cap) {
     int slot = net_begin(url);
     u64 deadline;
-    if (slot <= 0) return slot;
+    if (slot < 0) return slot;
     deadline = now_us() + 20000000ULL;
     while (now_us() < deadline) {
         int r = net_poll(slot);
@@ -857,16 +1274,6 @@ int net_fetch(const char *url, char *dst, int cap) {
     net_abort(slot);
     return NET_ERR_TIMEOUT;
 }
-#else
-int net_begin(const char *url) { (void)url; return NET_ERR_UNSUPPORTED; }
-int net_poll(int slot) { (void)slot; return NET_ERR_UNSUPPORTED; }
-int net_finish(int slot, char *dst, int cap) { (void)slot; (void)dst; (void)cap; return NET_ERR_UNSUPPORTED; }
-void net_abort(int slot) { (void)slot; }
-int net_fetch(const char *url, char *dst, int cap) {
-    (void)url; (void)dst; (void)cap;
-    return NET_ERR_UNSUPPORTED;
-}
-#endif
 
 /* -------------------------------------------------------------------------- */
 /*  Common HAL helpers                                                       */

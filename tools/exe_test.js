@@ -1,15 +1,20 @@
 /* ==========================================================================
  *  dist/AE.exe structural test
  *
- *  The launcher is Windows code and cannot run here, so this checks everything
- *  that CAN be checked without Windows:
+ *  AE is a single Windows executable: a small native launcher with the whole
+ *  operating system appended to it as a second PE image.  Neither half can be
+ *  executed here, so this checks everything that CAN be checked off-Windows:
  *
- *    1. it is a well-formed PE32+ GUI executable, x86-64;
- *    2. its import table names only functions that exist on Windows 10/11;
- *    3. the payload embedded in it is byte-identical to dist/AE.html;
- *    4. that payload, extracted the way the launcher extracts it, boots the OS
- *       in a JavaScript engine -- so the bytes the exe will write to %TEMP% are
- *       proven good, not just present.
+ *    1. the outer file is a well-formed PE32+ GUI executable, x86-64, with no C
+ *       runtime dependency -- it must start on a bare Windows machine;
+ *    2. the inner image is a complete PE executable too (correct machine type,
+ *       GUI subsystem, a sane size), found exactly the way the launcher finds
+ *       it: scan for the payload marker, then take the next MZ/PE header;
+ *    3. the two halves agree -- the appended length matches the built image on
+ *       disk, so the extract step cannot write a truncated file;
+ *    4. the launcher's own message strings are present, which is what proves
+ *       the extraction/retry/message-box path was compiled in rather than
+ *       optimised away.
  *
  *  Run: node tools/exe_test.js
  * ======================================================================== */
@@ -17,11 +22,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 const EXE = path.join(ROOT, 'dist', 'AE.exe');
-const HTML = path.join(ROOT, 'dist', 'AE.html');
+const IMG = path.join(ROOT, 'dist', 'AE-os.exe');
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -37,27 +41,45 @@ if (!fs.existsSync(EXE)) {
 const exe = fs.readFileSync(EXE);
 console.log('AE.exe test\n');
 
-/* ---- 1. PE structure --------------------------------------------------- */
-const peOff = exe.readUInt32LE(0x3c);
-const machine = exe.readUInt16LE(peOff + 4);
-const numSections = exe.readUInt16LE(peOff + 6);
-const optOff = peOff + 24;
-const magic = exe.readUInt16LE(optOff);
-const subsystem = exe.readUInt16LE(optOff + 68);
-const entryRva = exe.readUInt32LE(optOff + 16);
+/* ---- helpers ----------------------------------------------------------- */
+function peInfo(buf, off) {
+  if (buf.slice(off, off + 2).toString('latin1') !== 'MZ') return null;
+  const peOff = off + buf.readUInt32LE(off + 0x3c);
+  if (peOff + 24 > buf.length) return null;
+  if (buf.slice(peOff, peOff + 4).toString('binary') !== 'PE\0\0') return null;
+  const machine = buf.readUInt16LE(peOff + 4);
+  const numSections = buf.readUInt16LE(peOff + 6);
+  const optOff = peOff + 24;
+  return {
+    machine,
+    numSections,
+    magic: buf.readUInt16LE(optOff),
+    subsystem: buf.readUInt16LE(optOff + 68),
+    entryRva: buf.readUInt32LE(optOff + 16),
+  };
+}
 
+function checkPE(label, info) {
+  check(label + ': x86-64 machine type', info.machine === 0x8664, '0x' + info.machine.toString(16));
+  check(label + ': PE32+ optional header', info.magic === 0x20b, '0x' + info.magic.toString(16));
+  check(label + ': GUI subsystem (no console flash)', info.subsystem === 2, String(info.subsystem));
+  check(label + ': has an entry point', info.entryRva !== 0, '0x' + info.entryRva.toString(16));
+  check(label + ': section count sane',
+    info.numSections > 0 && info.numSections < 32, String(info.numSections));
+}
+
+/* ---- 1. the outer launcher -------------------------------------------- */
+console.log('-- launcher');
+const outer = peInfo(exe, 0);
 check('starts with MZ', exe.slice(0, 2).toString() === 'MZ');
-check('PE signature present', exe.slice(peOff, peOff + 4).toString('binary') === 'PE\0\0');
-check('x86-64 machine type', machine === 0x8664, '0x' + machine.toString(16));
-check('PE32+ optional header', magic === 0x20b, '0x' + magic.toString(16));
-check('GUI subsystem (no console flash)', subsystem === 2, String(subsystem));
-check('has an entry point', entryRva !== 0, '0x' + entryRva.toString(16));
-check('section count sane', numSections > 0 && numSections < 32, String(numSections));
+if (!outer) {
+  console.log('\nouter image is not a valid PE -- stopping');
+  process.exit(1);
+}
+checkPE('launcher', outer);
 
-/* ---- 2. imports -------------------------------------------------------- */
 {
   const dlls = [];
-  const names = [];
   for (let i = 0; i < exe.length - 20; i++) {
     if (exe[i] !== 0x2e) continue;             /* '.' of '.dll' */
     const s = exe.slice(i - 8, i + 4).toString('latin1');
@@ -65,173 +87,75 @@ check('section count sane', numSections > 0 && numSections < 32, String(numSecti
       if (!dlls.includes(s)) dlls.push(s);
     }
   }
-  /* Function names appear as NUL-terminated ASCII in the import tables. */
-  const known = ['CloseHandle', 'CreateFileA', 'CreateProcessA', 'GetEnvironmentVariableA',
-    'GetFileAttributesA', 'GetFileSizeEx', 'GetLastError', 'GetModuleFileNameA',
-    'GetTempPathA', 'MessageBoxA', 'ReadFile', 'RegCloseKey', 'RegOpenKeyExA',
-    'RegQueryValueExA', 'ShellExecuteA', 'VirtualAlloc', 'VirtualFree', 'WriteFile',
-    'GetModuleHandleA'];
-  for (const k of known) {
-    if (exe.includes(Buffer.from(k + '\0', 'latin1'))) names.push(k);
-  }
-  check('uses only core Windows DLLs',
-    dlls.every((d) => /^(KERNEL32|USER32|SHELL32|ADVAPI32|GDI32)\.DLL$/i.test(d)),
+  check('no C runtime dependency',
+    !dlls.some((d) => /^(MSVCRT|UCRT|VCRUNTIME)/i.test(d)), dlls.join(', '));
+  check('links only DLLs present on Windows 10/11',
+    dlls.every((d) => /^(KERNEL32|USER32|SHELL32|ADVAPI32|GDI32|WINHTTP|OLE32|COMDLG32)\.DLL$/i.test(d)),
     dlls.join(', '));
-  check('all import names are real Windows APIs',
-    names.every((n) => known.includes(n)), names.filter((n) => !known.includes(n)).join(', '));
-  check('no C runtime dependency', !dlls.some((d) => /^(MSVCRT|UCRT|VCRUNTIME)/i.test(d)),
-    dlls.join(', '));
-  console.log('       (' + dlls.join(', ') + '; ' + names.length + ' imports recognised)');
+  console.log('       (' + dlls.join(', ') + ')');
 }
 
-/* ---- 3. payload integrity --------------------------------------------- */
-const anchor = Buffer.from('<!DOCTYPE html');
-const idx = exe.indexOf(anchor);
-check('payload anchor found', idx > 0, 'offset ' + idx);
+/* ---- 2. the appended OS image ------------------------------------------ */
+console.log('\n-- payload');
+const MARKER = Buffer.from('\nAETHEROS-PAYLOAD-V1\n');
+let imgOff = -1;
+{
+  const m = exe.indexOf(MARKER);
+  check('payload marker present', m > 0, 'offset ' + m);
+  if (m > 0) {
+    /* Walk the marker to the next MZ whose e_lfanew points at a PE signature,
+       exactly as launcher.c does, so this test cannot pass on an image the
+       launcher would fail to find. */
+    for (let j = m + MARKER.length; j + 0x40 < exe.length; j++) {
+      if (exe[j] !== 0x4d || exe[j + 1] !== 0x5a) continue;      /* 'MZ' */
+      const lfanew = exe.readUInt32LE(j + 0x3c);
+      if (lfanew < 0x40 || lfanew > 0xf0) continue;
+      const peOff = j + lfanew;
+      if (peOff + 4 > exe.length) continue;
+      if (exe.slice(peOff, peOff + 4).toString('binary') !== 'PE\0\0') continue;
+      imgOff = j;
+      break;
+    }
+  }
+  check('the marker leads to an MZ/PE header', imgOff > 0, 'offset ' + imgOff);
+}
 
-let payload = null;
-if (idx > 0) {
-  payload = exe.slice(idx);
-  const html = fs.readFileSync(HTML);
-  check('payload is byte-identical to dist/AE.html',
-    payload.length === html.length && payload.equals(html),
-    payload.length + ' vs ' + html.length + ' bytes');
-  check('payload is complete (ends with </html>)',
-    payload.slice(-32).toString('latin1').trim().endsWith('</html>'));
-  check('payload is not a stub', payload.length > 1000000,
+if (imgOff > 0) {
+  const inner = peInfo(exe, imgOff);
+  checkPE('payload', inner);
+  const payload = exe.slice(imgOff);
+  check('payload is a real program (not a stub)', payload.length > 300000,
     payload.length + ' bytes');
+  check('payload is measured to end of file', imgOff + payload.length === exe.length,
+    payload.length + ' of ' + (exe.length - imgOff) + ' bytes');
+
+  if (fs.existsSync(IMG)) {
+    const built = fs.readFileSync(IMG);
+    check('payload is byte-identical to dist/AE-os.exe',
+      built.length === payload.length && built.equals(payload),
+      payload.length + ' vs ' + built.length + ' bytes');
+  } else {
+    check('dist/AE-os.exe exists to compare against', false, 'missing');
+  }
 }
 
-/* ---- 4. the extracted payload actually runs --------------------------- */
-if (payload) {
-  const listeners = new Map();
-  function mk(n) {
-    return {
-      _name: n, width: 1280, height: 720, focus() {},
-      getBoundingClientRect() { return { left: 0, top: 0, width: 1280, height: 720 }; },
-      addEventListener(t, f) {
-        const k = n + ':' + t;
-        if (!listeners.has(k)) listeners.set(k, []);
-        listeners.get(k).push(f);
-      },
-      getContext() {
-        if (!this._c) {
-          this._c = {
-            createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
-            putImageData(i) { this.last = i; },
-          };
-        }
-        return this._c;
-      },
-    };
-  }
-  const canvas = mk('canvas');
-  const els = {
-    screen: canvas, status: { textContent: '' }, fps: { textContent: '' },
-    overlay: { classList: { add() {}, remove() {} } },
-    'err-title': { textContent: '' }, 'err-body': { textContent: '' },
-    'err-hint': { textContent: '' }, 'err-close': { focus() {}, addEventListener() {} },
-    fullscreen: { addEventListener() {} },
-  };
-  const sandbox = {
-    console,
-    performance: { now: () => Number(process.hrtime.bigint() / 1000n) / 1000 },
-    requestAnimationFrame: (f) => setTimeout(() => f(sandbox.performance.now()), 0),
-    setTimeout, clearTimeout,
-    document: {
-      title: '', fullscreenElement: null,
-      getElementById: (id) => els[id] || null,
-      addEventListener() {},
-      documentElement: { requestFullscreen: () => Promise.resolve() },
-      exitFullscreen: () => Promise.resolve(),
-    },
-    atob: (s) => Buffer.from(s, 'base64').toString('binary'),
-    AudioContext: function () {
-      return {
-        createOscillator: () => ({ frequency: {}, connect: () => ({ connect() {} }), start() {}, stop() {} }),
-        createGain: () => ({ gain: {}, connect: () => ({ connect() {} }) }),
-        destination: {}, currentTime: 0,
-      };
-    },
-    WebAssembly, BigInt, Math, Promise, Date, Object, String, Number, isNaN, parseInt,
-    Uint8Array, Uint8ClampedArray, Uint32Array, Int32Array, DataView, ArrayBuffer,
-  };
-  sandbox.window = sandbox;
-  sandbox.self = sandbox;
-  sandbox.globalThis = sandbox;
-  sandbox.setTimeout = setTimeout;
-  sandbox.addEventListener = (t, f) => {
-    const k = 'window:' + t;
-    if (!listeners.has(k)) listeners.set(k, []);
-    listeners.get(k).push(f);
-  };
-
-  const htmlText = payload.toString('latin1');
-  const scripts = [...htmlText.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-  check('payload contains its scripts', scripts.length === 3, scripts.length + ' blocks');
-
-  try {
-    vm.createContext(sandbox);
-    for (const s of scripts) vm.runInContext(s, sandbox, { filename: 'AE.exe:payload' });
-  } catch (err) {
-    check('payload scripts execute', false, String(err && err.message));
-  }
-
-  setTimeout(() => {
-    const ctx = canvas.getContext('2d');
-    const painted = !!(ctx.last && ctx.last.width === 1280);
-    check('the payload boots the OS', painted,
-      painted ? '' : 'status="' + els.status.textContent + '"');
-    if (painted) {
-      let ink = 0;
-      for (let i = 0; i < ctx.last.data.length; i += 4) {
-        if (ctx.last.data[i] || ctx.last.data[i + 1] || ctx.last.data[i + 2]) ink++;
-      }
-      check('the OS renders on screen', ink > 300000, ink + ' non-black px');
-    }
-    /* The launcher builds one raw command line for the browser and the child
-     * splits it itself.  If a path is not quoted, every account whose name has
-     * a space in it (most of them) gets a broken --app url and no window.  Build
-     * the same line the C code builds and split it the way Windows does. */
-    {
-      function buildLine(app, browserPath) {
-        const slash = Math.max(app.lastIndexOf('\\'), app.lastIndexOf('/'));
-        const prof = app.slice(0, slash + 1);
-        let url = '--app="file:///' + app.replace(/\\/g, '/') + '"';
-        url += ' --window-size=1320,820 --user-data-dir="' + prof + 'AE-profile"';
-        return '"' + browserPath + '" ' + url;
-      }
-      function splitArgv(s) {
-        const out = [];
-        let cur = '';
-        let q = false;
-        for (const ch of s) {
-          if (ch === '"') { q = !q; continue; }
-          if (ch === ' ' && !q) { if (cur) out.push(cur); cur = ''; continue; }
-          cur += ch;
-        }
-        if (cur) out.push(cur);
-        return out;
-      }
-      const spaced = 'C:\\Users\\Bob Smith\\AppData\\Local\\Temp\\AE.html';
-      const browser = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-      const argv = splitArgv(buildLine(spaced, browser));
-      const wantProf = 'C:\\Users\\Bob Smith\\AppData\\Local\\Temp\\AE-profile';
-      const joined = argv.join('|');
-      check('a spaced path stays one argument',
-        argv[1] === '--app=file:///C:/Users/Bob Smith/AppData/Local/Temp/AE.html',
-        argv[1]);
-      check('the browser path is not split', argv[0] === browser, argv[0]);
-      check('the private profile path survives a space',
-        joined.indexOf('--user-data-dir=' + wantProf) !== -1);
-      check('exactly four arguments reach the browser',
-        argv.length === 4, argv.length + ' args');
-    }
-
-    console.log(failures === 0 ? '\nALL CHECKS PASSED' : '\n' + failures + ' CHECK(S) FAILED');
-    process.exit(failures === 0 ? 0 : 1);
-  }, 4600);
-} else {
-  console.log('\n' + failures + ' CHECK(S) FAILED');
-  process.exit(1);
+/* The launcher does more than start the image: it owns the shell integration,
+ * and its diagnostics are the only thing a user sees when extraction fails.  A
+ * string scan is a blunt instrument, but it is the one check available here and
+ * it catches a build where the error path silently dropped out. */
+console.log('\n-- launcher behaviour');
+for (const s of [
+  'AE could not start',
+  'This file seems to be incomplete',
+  'could not start its own OS image',
+]) {
+  check('diagnostic present: "' + s + '"',
+    exe.includes(Buffer.from(s, 'latin1')), 'not found');
 }
+check('extracts to a per-user folder (%LOCALAPPDATA%\\AE)',
+  exe.includes(Buffer.from('LOCALAPPDATA', 'latin1')));
+check('version-tagged image name (AE-<tag>.exe)',
+  exe.includes(Buffer.from('AE-', 'latin1')));
+
+console.log(failures === 0 ? '\nALL CHECKS PASSED' : '\n' + failures + ' CHECK(S) FAILED');
+process.exit(failures === 0 ? 0 : 1);

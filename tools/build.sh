@@ -34,6 +34,7 @@ MODULES=(
   dev/67_procfs.c
   dev/70_bytecode.c
   dev/75_registry.c
+  dev/76_mcp.c
   dev/80_wm.c
   dev/85_app_sh.c
   dev/86_app_sysmon.c
@@ -64,7 +65,7 @@ cat > aether_os.c <<'BANNER'
  *
  *  Build (MinGW-w64 gcc):
  *      gcc -O3 -std=c11 aether_os.c -o AE.exe \
- *          -lgdi32 -luser32 -lkernel32 -lwinmm -mwindows -static
+ *          -lgdi32 -luser32 -lkernel32 -lwinmm -lshell32 -lwinhttp -mwindows -static
  *
  *  Generated from the numbered modules in dev/ by tools/build.sh.  Those are the
  *  authoritative sources; concatenating them yields this file.
@@ -96,7 +97,7 @@ else
       -Wno-unused-parameter -Wno-unused-function -Wno-sign-compare \
       aether_os.c dev/startup.c -o AE.exe \
       -nostdlib -isystem "$ZIG_LIBC" \
-      -lgdi32 -luser32 -lkernel32 -lwinmm \
+      -lgdi32 -luser32 -lkernel32 -lwinmm -lshell32 -lwinhttp \
       -Wl,--subsystem,windows -Wl,--entry,aether_crt_entry
   echo "built AE.exe ($(stat -c%s AE.exe) bytes)"
 fi

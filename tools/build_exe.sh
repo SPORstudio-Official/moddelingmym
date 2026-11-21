@@ -4,17 +4,23 @@
 #
 #   ./tools/build_exe.sh
 #
-# Produces one self-contained .exe that carries the whole single-file AE
-# build inside it. Double-click it and the OS opens in an app-style window.
+# Produces one self-contained .exe that carries the whole operating system
+# inside it.  Double-click it and AE starts as a native Windows application.
 #
-# Two parts, joined by a marker:
+# Two parts, joined end to end:
 #   1. tools/launcher/launcher.c compiled freestanding to a tiny GUI executable
-#      (no C runtime; imports only kernel32, shell32 and advapi32)
-#   2. dist/AE.html appended after the PE image
+#      (no C runtime; imports only kernel32/shell32/advapi32/user32).  It owns
+#      the icon, the version metadata, the AppUserModelID and the Start-menu
+#      entry, extracts the image once into %LOCALAPPDATA%\AE and runs it.
+#   2. dist/AE-os.exe -- the OS itself, a complete second PE image built from
+#      the same dev/ sources against Win32.  It creates its own window with
+#      GDI, runs its own event loop, paints every pixel with its own compositor
+#      and fetches pages with WinHTTP.  No browser, no engine, no web page.
 #
-# The launcher finds the marker, writes the payload to %TEMP%\AE.html and
-# opens it in Edge or Chrome --app mode. Every failure path shows a message box,
-# so the exe can never fail silently the way the old build did.
+# The browser build (dist/AE.html, WebAssembly) is still produced as a
+# companion, but it is no longer what the application runs.
+#
+# Every failure path shows a message box, so the exe can never fail silently.
 # ============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -26,12 +32,20 @@ if [ ! -x "$ZIG" ]; then
   else echo "zig not found -- run tools/setup_toolchain.sh" >&2; exit 1; fi
 fi
 
-echo "==> building the WebAssembly image and the single-file app"
-./tools/build_wasm.sh
-node tools/bundle_standalone.js
+# Two artefacts come out of the build:
+#
+#   dist/AE-os.exe   the operating system itself -- the native Win32 build of
+#                    dev/*.c (own window, own event loop, own compositor, own
+#                    HTTP client).  This is the payload AE.exe carries.
+#   dist/AE.html     the same OS compiled to WebAssembly, for the browser.  Kept
+#                    as a companion because it needs no install, but it is no
+#                    longer what the application runs.
+echo "==> building the native operating system image"
+ZIG="$ZIG" ./tools/build.sh
 
-HTML=dist/AE.html
-[ -f "$HTML" ] || { echo "missing $HTML" >&2; exit 1; }
+OS=AE.exe
+[ -f "$OS" ] || { echo "missing $OS" >&2; exit 1; }
+cp "$OS" dist/AE-os.exe
 
 echo "==> compiling the launcher stub"
 # -nostdlib also strips the include search path, so point the compiler at zig's
@@ -60,7 +74,7 @@ RES=$(mktemp -d)/ae.res
 
 echo "==> appending the payload"
 OUT=dist/AE.exe
-cat "$STUB" "$HTML" > "$OUT"
+cat "$STUB" dist/AE-os.exe > "$OUT"
 
 # --- verify the result -----------------------------------------------------
 echo "==> verifying"
@@ -81,14 +95,26 @@ assert subsystem == 2, 'not a GUI subsystem (%d)' % subsystem
 
 marker = b'\nAETHEROS-PAYLOAD-V1\n'
 assert data.find(marker) > 0, 'payload marker not found in the stub'
-anchor = b'<!DOCTYPE html'
-idx = data.find(anchor)
-assert idx > 0, 'payload anchor not found'
+
+# The payload is a second, complete PE image: the OS itself.  Find it by the
+# marker, then walk forward to the next MZ/PE header.
+m = data.find(marker)
+start = m if m > 0 else 0
+idx = -1
+while True:
+    idx = data.find(b'MZ', start)
+    if idx < 0:
+        raise AssertionError('no PE image found after the launcher')
+    pe = struct.unpack_from('<I', data, idx + 0x3c)[0]
+    if data[idx + pe:idx + pe + 4] == b'PE\0\0':
+        break
+    start = idx + 2
 payload = data[idx:]
-assert payload.rstrip().endswith(b'</html>'), 'payload is truncated'
-assert b'WebAssembly' in payload and b'aether-host' not in payload[:0], 'payload is not the app'
-# The launcher was linked with the marker; make sure the two agree.
-assert data[:2] == b'MZ'
+pl_pe = struct.unpack_from('<I', payload, 0x3c)[0]
+assert payload[pl_pe:pl_pe + 4] == b'PE\0\0', 'payload is not a PE image'
+pl_sub = struct.unpack_from('<H', payload, pl_pe + 24 + 68)[0]
+assert pl_sub == 2, 'payload is not a GUI application (%d)' % pl_sub
+assert len(payload) > 100000, 'payload is too small to be the OS'
 
 print('  file      %s' % path)
 print('  size      %s bytes' % format(len(data), ','))

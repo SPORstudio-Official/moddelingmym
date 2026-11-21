@@ -1,25 +1,27 @@
 /* ==========================================================================
  *  AE (Architecture Environment) -- Windows launcher stub
  *
- *  A small native executable that carries the entire single-file AE build inside
- *  itself, writes it to a private app folder and opens it in a browser's app
- *  mode (Edge or Chrome with --app: no tabs, no address bar, no menu).
+ *  A small native executable that carries the whole AE operating system inside
+ *  itself as an appended second PE image, writes it to a private app folder and
+ *  starts it.  The extracted image is a real Win32 program -- its own window,
+ *  its own message loop, its own compositor and its own HTTP client -- so what
+ *  runs is AE, not a web page in someone else's browser.
  *
- *  Why a stub rather than an embedded engine: AE is a WebAssembly module and
- *  needs a JavaScript engine to host it.  Shipping one means embedding Chromium
- *  (~150 MB) or writing a JS interpreter.  Every Windows 10/11 machine already
- *  has Edge, so the honest single-file application is a small launcher carrying
- *  the OS, not a 150 MB bundler.
+ *  Why a stub rather than a single unsigned blob: Windows caches an executable's
+ *  icon and version metadata in the shell cache, and a file whose bytes change
+ *  on every build keeps the same cache key.  Keeping the outer file stable and
+ *  version-tagged (AE-<tag>.exe) means an upgrade never collides with a copy
+ *  that is currently running, which on Windows would be a sharing violation.
  *
- *  The window this opens must look like AE and never like Edge, which is why the
- *  stub does four extra things:
+ *  The stub also does the shell work the OS image should not have to do every
+ *  launch:
  *    - it carries its own icon and version resource (tools/launcher/ae.rc), so
  *      Explorer, the Start menu, search and the taskbar show the AE mark;
- *    - it registers an AE AppUserModelID and pins it on the browser window, so
- *      the taskbar groups and labels it "AE" instead of "Microsoft Edge";
- *    - it launches the browser with first-run, sync, restore-pages and default
- *      browser prompts disabled, so none of Edge's own chrome or nags appear;
- *    - it keeps the profile in %LOCALAPPDATA%\AE, not in Edge's.
+ *    - it registers an AE AppUserModelID, so the taskbar groups and labels the
+ *      window "AE";
+ *    - it teaches the shell about the executable (open verb, registered
+ *      application, capabilities) so AE appears in Start-menu search and
+ *      "Default apps" under its own name.
  *
  *  Linked freestanding (-nostdlib), like the kernel: no C runtime, no imports
  *  beyond kernel32/shell32/advapi32/user32.
@@ -30,12 +32,17 @@
 #include <shellapi.h>
 
 /* The payload follows this marker.  The marker lives in a data section so the
- * scanner below can find it in the mapped image; tools/build_exe.sh appends the
- * HTML after the whole PE file. */
+ * scanner below can find it; tools/build_exe.sh appends a second PE image after
+ * the whole outer file, so the reader walks from the marker to the next MZ. */
 __attribute__((used, section(".payload")))
 static const char PAYLOAD_MAGIC[] = "\nAETHEROS-PAYLOAD-V1\n";
 
 #define MAGIC_LEN (sizeof(PAYLOAD_MAGIC) - 1)
+
+/* Bumped together with the OS version.  The extracted image name includes it,
+ * so upgrading AE never tries to overwrite an image the previous version still
+ * has open. */
+#define AE_IMAGE_TAG "0_2_0"
 
 /* The compiler lowers ZeroMemory() and struct assignment to memset/memcpy even
  * in freestanding mode, so those two symbols have to exist here. */
@@ -91,113 +98,11 @@ static void s_uitoa(unsigned long long v, char *out) {
     out[n] = 0;
 }
 
-/* ---- payload ----------------------------------------------------------- *
- * The bytes after the marker are the HTML.  Length comes from the PE file size
- * on disk rather than a stored field: appending to a signed binary is easier to
- * verify, and a corrupt or truncated download is caught by the length check
- * instead of producing a half-written page. */
-typedef struct {
-    const unsigned char *data;
-    unsigned long long   len;
-} payload_t;
-
-/* Read the appended HTML by re-opening this executable.
- *
- * The payload does not start immediately after the marker: the marker lives in a
- * data section inside the last mapped page, and the payload is appended after
- * the whole file, so there is padding in between.  Anchor on the HTML doctype,
- * which cannot appear in the stub's own code, and read to end of file. */
-static payload_t payload_read(const char *self_path) {
-    payload_t p = { 0, 0 };
-    HANDLE h = CreateFileA(self_path, GENERIC_READ, FILE_SHARE_READ, NULL,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    LARGE_INTEGER size;
-    unsigned char *buf;
-    DWORD read = 0;
-
-    if (h == INVALID_HANDLE_VALUE) return p;
-    if (!GetFileSizeEx(h, &size) || size.QuadPart <= 0) { CloseHandle(h); return p; }
-    buf = (unsigned char *)VirtualAlloc(NULL, (SIZE_T)size.QuadPart,
-                                        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!buf) { CloseHandle(h); return p; }
-    if (!ReadFile(h, buf, (DWORD)size.QuadPart, &read, NULL) || read != (DWORD)size.QuadPart) {
-        VirtualFree(buf, 0, MEM_RELEASE);
-        CloseHandle(h);
-        return p;
-    }
-    CloseHandle(h);
-
-    /* The HTML always starts with this; scan the tail (the payload is at the
-     * end, and the stub is small, but keep the window generous). */
-    {
-        static const char anchor[] = "<!DOCTYPE html";
-        const unsigned long long alen = sizeof(anchor) - 1;
-        unsigned long long limit = (unsigned long long)read;
-        unsigned long long start = limit > (64ULL * 1024 * 1024) ? limit - 64ULL * 1024 * 1024 : 0;
-        unsigned long long i;
-        for (i = start; i + alen <= limit; i++) {
-            unsigned long long k;
-            if (buf[i] != '<') continue;
-            for (k = 1; k < alen; k++) {
-                if (buf[i + k] != (unsigned char)anchor[k]) break;
-            }
-            if (k != alen) continue;
-            p.data = buf + i;
-            p.len = limit - i;
-            return p;
-        }
-    }
-    VirtualFree(buf, 0, MEM_RELEASE);
-    return p;
-}
-
-static int file_exists_path(const char *path) {
-    DWORD a = GetFileAttributesA(path);
-    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
-}
-
-/* ---- browser discovery ------------------------------------------------- */
-typedef struct {
-    char path[MAX_PATH];
-    char args[4096];
-} launch_t;
-
-static int find_browser(launch_t *out) {
-    static const char *suffix[] = {
-        "\\Microsoft\\Edge\\Application\\msedge.exe",
-        "\\Google\\Chrome\\Application\\chrome.exe",
-        "\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-    };
-    static const char *envs[] = { "ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA" };
-    unsigned int e, s;
-
-    for (s = 0; s < 3; s++) {
-        for (e = 0; e < 3; e++) {
-            char root[MAX_PATH];
-            DWORD n = GetEnvironmentVariableA(envs[e], root, MAX_PATH);
-            if (n == 0 || n >= MAX_PATH) continue;
-            s_copy(out->path, root, MAX_PATH);
-            s_cat(out->path, suffix[s], MAX_PATH);
-            if (file_exists_path(out->path)) return 1;
-        }
-    }
-    /* Edge is registered by App Paths even when installed to a non-standard
-     * place, so fall back to that before giving up. */
-    {
-        HKEY key;
-        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-                          "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe",
-                          0, KEY_READ, &key) == ERROR_SUCCESS) {
-            DWORD cap = MAX_PATH, type = 0;
-            LONG r = RegQueryValueExA(key, NULL, NULL, &type, (LPBYTE)out->path, &cap);
-            RegCloseKey(key);
-            if (r == ERROR_SUCCESS && file_exists_path(out->path)) return 1;
-        }
-    }
-    return 0;
-}
-
-
+/* ---- application identity ---------------------------------------------- *
+ * These are what make Windows call the program AE everywhere: the taskbar
+ * button (AppUserModelID), Start-menu search and "Default apps" (registered
+ * application + capabilities) and Explorer's open verb.  They are static
+ * because the freestanding link has no CRT to run constructors. */
 /* ---- application identity ---------------------------------------------- *
  * Windows decides what the taskbar button says, what icon it wears and which
  * window group it joins from the process's AppUserModelID -- and an inherited
@@ -275,9 +180,8 @@ static void ae_register_appid(const char *exe_path) {
 }
 
 /* ---- error reporting --------------------------------------------------- *
- * The stub is a GUI binary: a failure that printed nothing would look like the
- * machine did nothing at all, which is the defect the old standalone build had.
- * Every failure path ends in a message box. */
+ * Every failure path ends in a message box: a silent exit is what made the
+ * first browser-based build look like it did nothing at all. */
 static void fail(const char *what, DWORD code) {
     char msg[600];
     s_copy(msg, "AE could not start.\n\n", sizeof(msg));
@@ -292,22 +196,86 @@ static void fail(const char *what, DWORD code) {
     MessageBoxA(NULL, msg, "AE", MB_ICONERROR | MB_OK);
 }
 
+/* ---- payload ----------------------------------------------------------- *
+ * The bytes after the marker are the HTML.  Length comes from the PE file size
+ * on disk rather than a stored field: appending to a signed binary is easier to
+ * verify, and a corrupt or truncated download is caught by the length check
+ * instead of producing a half-written page. */
+typedef struct {
+    const unsigned char *data;
+    unsigned long long   len;
+} payload_t;
+
+/* Read the appended HTML by re-opening this executable.
+ *
+ * The payload does not start immediately after the marker: the marker lives in a
+ * data section inside the last mapped page, and the payload is appended after
+ * the whole file, so there is padding in between.  Anchor on the HTML doctype,
+ * which cannot appear in the stub's own code, and read to end of file. */
+static payload_t payload_read(const char *self_path) {
+    payload_t p = { 0, 0 };
+    HANDLE h = CreateFileA(self_path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    LARGE_INTEGER size;
+    unsigned char *buf;
+    DWORD read = 0;
+
+    if (h == INVALID_HANDLE_VALUE) return p;
+    if (!GetFileSizeEx(h, &size) || size.QuadPart <= 0) { CloseHandle(h); return p; }
+    buf = (unsigned char *)VirtualAlloc(NULL, (SIZE_T)size.QuadPart,
+                                        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!buf) { CloseHandle(h); return p; }
+    if (!ReadFile(h, buf, (DWORD)size.QuadPart, &read, NULL) || read != (DWORD)size.QuadPart) {
+        VirtualFree(buf, 0, MEM_RELEASE);
+        CloseHandle(h);
+        return p;
+    }
+    CloseHandle(h);
+
+    /* The appended bytes are a second PE image: the native OS executable.
+     * Find the marker the build script wrote into the stub, then take the next
+     * MZ/PE header after it -- the marker itself lives inside a mapped data
+     * section, so there is padding between the two. */
+    {
+        const unsigned long long limit = (unsigned long long)read;
+        unsigned long long i, j;
+        for (i = 0; i + sizeof(PAYLOAD_MAGIC) <= limit; i++) {
+            unsigned long long k;
+            if (buf[i] != (unsigned char)PAYLOAD_MAGIC[0]) continue;
+            for (k = 1; k < sizeof(PAYLOAD_MAGIC) - 1; k++)
+                if (buf[i + k] != (unsigned char)PAYLOAD_MAGIC[k]) break;
+            if (k != sizeof(PAYLOAD_MAGIC) - 1) continue;
+            j = i + k;
+            for (; j + 0x40 < limit; j++) {
+                if (buf[j] == 'M' && buf[j + 1] == 'Z'
+                    && buf[j + 0x3c] < 0x40
+                    && buf[j + 0x3c + 4] >= 0x40
+                    && buf[j + 0x3c + 4] <= 0xf0) {
+                    p.data = buf + j;
+                    p.len = limit - j;
+                    return p;
+                }
+            }
+        }
+    }
+    VirtualFree(buf, 0, MEM_RELEASE);
+    return p;
+}
+
+
 /* ---- main -------------------------------------------------------------- *
  * The command-line buffers are file-scope rather than automatic.  A function
  * whose frame exceeds 4 KB needs a stack probe (___chkstk_ms) on Win64, and a
  * freestanding link has no provider for it -- which is how adding the browser
  * flags turned a working build into an undefined-symbol error. */
-static char g_url[2048];
-static char g_prof[MAX_PATH];
+static char g_url[2048];   /* quoted command line for the OS image */
 static char g_self[MAX_PATH];
 static char g_app[MAX_PATH];
-static launch_t g_lt;
 
 int WINAPI aether_launcher_entry(void) {
     char *self = g_self;
     char *app = g_app;
     payload_t p;
-    launch_t *lt = &g_lt;
     int ok;
 
     if (!GetModuleFileNameA(NULL, self, MAX_PATH)) {
@@ -321,15 +289,33 @@ int WINAPI aether_launcher_entry(void) {
     ae_register_shell(self);
     ae_register_appid(self);
 
-    /* Already extracted and unchanged?  Reuse it, so launching twice does not
-     * rewrite the file (and so a slow disk is only paid once). */
+    /* Where the OS image is extracted.  A private folder under %LOCALAPPDATA%
+     * rather than %TEMP%: the image is an executable, and virus scanners and
+     * cleanup tools treat %TEMP% executables far more aggressively (some Windows
+     * configurations refuse to run them at all).  %LOCALAPPDATA%\AE is the same
+     * folder the installer uses, so a per-user install and a portable copy share
+     * one image instead of extracting twice. */
     {
-        DWORD n = GetTempPathA(MAX_PATH, app);
+        char base[MAX_PATH];
+        DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", base, MAX_PATH);
         if (n == 0 || n >= MAX_PATH) {
-            fail("Cannot find the temporary folder.", GetLastError());
-            return 1;
+            DWORD t = GetTempPathA(MAX_PATH, app);
+            if (t == 0 || t >= MAX_PATH) {
+                fail("Cannot find a folder to store the application in.", GetLastError());
+                return 1;
+            }
+        } else {
+            s_copy(app, base, MAX_PATH);
+            s_cat(app, "\\AE", MAX_PATH);
+            CreateDirectoryA(app, NULL);
+            s_cat(app, "\\", MAX_PATH);
         }
-        s_cat(app, "AE.html", MAX_PATH);
+        s_cat(app, "AE-", MAX_PATH);
+        /* One image per AE version: an upgrade extracts alongside the old one
+           instead of overwriting a file that a running copy has open (which
+           fails with a sharing violation on Windows). */
+        s_cat(app, AE_IMAGE_TAG, MAX_PATH);
+        s_cat(app, ".exe", MAX_PATH);
     }
 
     p = payload_read(self);
@@ -339,13 +325,26 @@ int WINAPI aether_launcher_entry(void) {
         return 2;
     }
 
-    /* write the payload out */
+    /* Extract the payload unless the right image is already there.  Comparing
+     * the size is enough: the name carries the version tag, so a match means it
+     * came from this build. */
+    ok = 0;
     {
+        HANDLE hin = CreateFileA(app, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                 FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hin != INVALID_HANDLE_VALUE) {
+            LARGE_INTEGER sz;
+            if (GetFileSizeEx(hin, &sz) && (unsigned long long)sz.QuadPart == (unsigned long long)p.len)
+                ok = 1;
+            CloseHandle(hin);
+        }
+    }
+    if (!ok) {
         HANDLE h = CreateFileA(app, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL, NULL);
         DWORD written = 0;
         if (h == INVALID_HANDLE_VALUE) {
-            fail("Cannot write the application to the temporary folder.", GetLastError());
+            fail("Cannot write the application into \n%LOCALAPPDATA%\\AE.", GetLastError());
             return 3;
         }
         ok = WriteFile(h, p.data, (DWORD)p.len, &written, NULL) && written == (DWORD)p.len;
@@ -356,83 +355,62 @@ int WINAPI aether_launcher_entry(void) {
         }
     }
 
-    /* Open it in an app-style window.
+    /* Run the payload.
      *
-     * Every path we pass is quoted.  CreateProcessA gives the child one command
-     * line and the child splits it itself, so an unquoted path breaks on any
-     * username or temp folder containing a space -- which is most Windows
-     * accounts ("C:\\Users\\Bob Smith\\...").  Chrome accepts a quoted value,
-     * so the url and the profile path are both wrapped in quotes.  The profile
-     * is private so the app gets its own window instead of handing the url to
-     * an already-running browser and exiting. */
-    ZeroMemory(lt, sizeof(*lt));
-    if (find_browser(lt)) {
-        char *url = g_url;
-        char *prof = g_prof;
+     * The payload is not a web page any more: tools/build_exe.sh appends a real
+     * native executable (built from the same dev/ sources, with Win32 as its
+     * chassis) and this launcher simply starts it.  That is what makes AE a
+     * standalone application rather than a browser shortcut -- it has its own
+     * window, its own event loop, its own compositor, and it fetches pages with
+     * its own HTTP client.
+     *
+     * The launcher still does the things a shell integration needs: it owns the
+     * icon, the version metadata, the AppUserModelID and the Start-menu entry,
+     * and it keeps the extracted image in a private folder so a read-only or
+     * roaming profile cannot break it.
+     */
+    {
         STARTUPINFOA si;
         PROCESS_INFORMATION pi;
+        char *cmd = g_url;
+        DWORD flags = 0;
 
-        s_copy(url, "--app=\"file:///", sizeof(g_url));
-        {
-            unsigned long long i;
-            char *path_forward = g_self;   /* self is no longer needed here */
-            for (i = 0; i + 1 < MAX_PATH && app[i]; i++)
-                path_forward[i] = (app[i] == '\\') ? '/' : app[i];
-            path_forward[i] = 0;
-            s_cat(url, path_forward, sizeof(g_url));
-        }
-        /* Flags that keep the host engine invisible.  Without them the first
-         * launch shows Edge's "welcome / import your data" wizard, an infobar
-         * about being signed out, and "restore pages?" after any crash -- all of
-         * them make the app look like Edge rather than AE. */
-        s_cat(url, "\""
-                   " --app-window-size=1320,820"
-                   " --window-size=1320,820"
-                   " --no-first-run"
-                   " --no-default-browser-check"
-                   " --no-service-autorun"
-                   " --disable-sync"
-                   " --disable-features=msEdgeFirstRunExperience,msHubApps,"
-                   "msEdgeIdentitySvc,IsolatedSandboxedIframes"
-                   " --hide-crash-restore-bubble"
-                   " --disable-background-networking"
-                   " --noerrdialogs"
-                   " --user-data-dir=\"", sizeof(g_url));
+        /* Quote the image path: CreateProcess splits the command line itself, so
+           an unquoted path breaks on any username or folder with a space. */
+        s_copy(cmd, "\"", sizeof(g_url));
+        s_cat(cmd, app, sizeof(g_url));
+        s_cat(cmd, "\"", sizeof(g_url));
 
-        /* Profile under %LOCALAPPDATA%\AE, not Edge's own folder: this is what
-         * gives the window its own identity and keeps AE's storage separate. */
-        {
-            static char base[MAX_PATH];
-            DWORD n = GetEnvironmentVariableA("LOCALAPPDATA", base, MAX_PATH);
-            if (n == 0 || n >= MAX_PATH) {
-                /* No local app data: fall back to the payload's own folder. */
-                unsigned long long i, slash = 0;
-                for (i = 0; app[i]; i++)
-                    if (app[i] == '\\' || app[i] == '/') slash = i + 1;
-                for (i = 0; i < slash && i + 1 < MAX_PATH; i++) prof[i] = app[i];
-                prof[i] = 0;
-            } else {
-                s_copy(prof, base, sizeof(prof));
-                s_cat(prof, "\\AE", sizeof(prof));
-            }
-        }
-        s_cat(url, prof, sizeof(g_url));
-        s_cat(url, "\"", sizeof(g_url));
+        ZeroMemory(&si, sizeof(si));
+        si.cb = sizeof(si);
 
-        if (CreateProcessA(lt->path, lt->args, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        if (CreateProcessA(app, cmd, NULL, NULL, FALSE, flags, NULL, NULL, &si, &pi)) {
             CloseHandle(pi.hThread);
             CloseHandle(pi.hProcess);
             return 0;
         }
+        {
+            /* One retry with a fresh copy: a stale extracted image (half written
+               by an interrupted previous run) fails to load, and rewriting it is
+               cheaper than asking the user to do anything. */
+            HANDLE h = CreateFileA(app, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                                   FILE_ATTRIBUTE_NORMAL, NULL);
+            if (h != INVALID_HANDLE_VALUE) {
+                DWORD written = 0;
+                WriteFile(h, p.data, (DWORD)p.len, &written, NULL);
+                CloseHandle(h);
+                if (CreateProcessA(app, cmd, NULL, NULL, FALSE, flags, NULL, NULL, &si, &pi)) {
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    return 0;
+                }
+            }
+        }
+        fail("AE could not start its own OS image.\n\n"
+             "The file below could not be run:", GetLastError());
+        MessageBoxA(NULL, app, "AE", MB_ICONINFORMATION | MB_OK);
+        return 4;
     }
 
-    /* No Chromium-family browser: let Windows pick. */
-    {
-        HINSTANCE r = ShellExecuteA(NULL, "open", app, NULL, NULL, SW_SHOWNORMAL);
-        if ((INT_PTR)r <= 32) {
-            fail("Cannot open AE.html -- no web browser was found.", (DWORD)(INT_PTR)r);
-            return 4;
-        }
-    }
-    return 0;
+    return 1;
 }

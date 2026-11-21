@@ -81,6 +81,14 @@ typedef struct {
     int  ctx_x, ctx_y;          /* top-left of the popup                     */
     int  ctx_hover;             /* hovered item index, -1 none               */
     int  ctx_close_pending;
+
+    /* compositor bookkeeping (see wm_render): what the last frame showed, so a
+       frame can tell whether anything global moved. */
+    int  prev_mouse_x, prev_mouse_y;
+    int  prev_count, prev_focused;
+    int  prev_start_open, prev_ctx_open, prev_snap_preview;
+    int  cursor_drawn_x, cursor_drawn_y;   /* where the sprite currently is    */
+    int  cursor_drawn;                     /* a sprite is in the framebuffer   */
 } wm_state_t;
 
 static wm_state_t g_wm;
@@ -193,6 +201,7 @@ static void wm_raise(int id) {
     g_wm.win[g_wm.count - 1] = w;
     for (i = 0; i < g_wm.count; i++) g_wm.win[i].z = i;
     g_wm.focused = id;
+    wm_damage_all();          /* the z-order changed: everything above moved */
 }
 
 static window_t *wm_top_at(int x, int y) {
@@ -285,6 +294,7 @@ int wm_open_app(const app_desc_t *desc, const char *arg) {
         if (p) p->window_id = (u32)w->id;
     }
     klog("wm: opened '%s' as window %d (pid %u)", desc->name, w->id, (unsigned)w->pid);
+    wm_damage_all();
     return w->id;
 }
 
@@ -309,6 +319,7 @@ void wm_close_window(int id) {
             }
         }
     }
+    wm_damage_all();
 }
 
 /* Closes the window owned by a dying process. */
@@ -323,6 +334,7 @@ void wm_minimize(int id) {
     window_t *w = wm_by_id(id);
     if (!w) return;
     w->win_state = WIN_MIN;
+    wm_damage_all();
     if (g_wm.focused == id) {
         int i;
         g_wm.focused = 0;
@@ -342,6 +354,7 @@ void wm_restore(int id) {
         w->frame = w->restore;
         w->win_state = WIN_OPEN;
         wm_layout_window(w);
+        wm_damage_all();
     }
     wm_raise(id);
 }
@@ -357,6 +370,7 @@ void wm_maximize(int id) {
     w->frame.h = SCREEN_H - WM_TASKBAR;
     w->win_state = WIN_MAXIMIZED;
     wm_layout_window(w);
+    wm_damage_all();
 }
 
 int wm_window_count(void) {
@@ -482,51 +496,83 @@ static wm_rect_t start_menu_rect(void) {
 /*  Start menu layout                                                       */
 /* -------------------------------------------------------------------------- */
 
+/* One layout function, used by both the painter and the hit test.  They used to
+   be duplicated -- the painter drew rows at x+8 with width w-16 and 26 px tall,
+   the hit test measured rows at x+10 with width w-20 -- so a click near a row's
+   edge (and every row after a category header, which only the painter stepped
+   over) missed.  The Start menu is now described once. */
 typedef struct {
-    wm_rect_t r;
-    int app_index;
-    int action;             /* app 0, 1 reboot, 2 panic, 3 shutdown, 4 page */
-} start_item_t;
+    wm_rect_t r;        /* full-width row rect                          */
+    int  kind;          /* 0 header, 1 app, 2 system action              */
+    int  app_index;
+    int  action;
+    const char *label;  /* header text / action label                    */
+    int  icon;
+    const char *subtitle;
+} start_row_t;
 
-static int start_menu_items(start_item_t *out, int maxitems) {
+#define START_MAX_ROWS 48
+
+static int start_menu_rows(start_row_t *out, int maxrows) {
     int n = 0, i;
-    int page = g_wm.start_page;
     wm_rect_t m = start_menu_rect();
     int y = m.y + 46;
     int limit = m.y + m.h - 42;
-    if (page == 0) {
-        /* categorised application list */
+
+    if (g_wm.start_page == 0) {
         int cat;
-        for (cat = 0; cat < 4 && n < maxitems; cat++) {
-            int any = 0;
+        static const char *cat_names[4] = { "SYSTEM", "DEVELOPMENT", "GRAPHICS", "UTILITIES" };
+        for (cat = 0; cat < 4; cat++) {
+            int header_done = 0, any = 0;
             for (i = 0; i < APP_COUNT; i++) {
                 const app_desc_t *d = app_by_index(i);
                 if (d->category != cat) continue;
-                if (!any) {
-                    /* category header occupies a row without an item */
+                any = 1;
+                if (!header_done) {
+                    if (n < maxrows) {
+                        out[n].r = (wm_rect_t){ m.x + 8, y, m.w - 16, 20 };
+                        out[n].kind = 0;
+                        out[n].label = cat_names[cat];
+                        out[n].app_index = -1;
+                        out[n].action = 0;
+                        out[n].icon = 0;
+                        out[n].subtitle = "";
+                        n++;
+                    }
                     y += 20;
-                    any = 1;
+                    header_done = 1;
                 }
-                if (y + 26 > limit) { n = maxitems; break; }
-                out[n].r = (wm_rect_t){ m.x + 10, y, m.w - 20, 26 };
-                out[n].app_index = i;
-                out[n].action = 0;
-                n++;
+                if (y + 26 > limit) return n;
+                if (n < maxrows) {
+                    out[n].r = (wm_rect_t){ m.x + 8, y, m.w - 16, 26 };
+                    out[n].kind = 1;
+                    out[n].app_index = i;
+                    out[n].action = 0;
+                    out[n].label = d->name;
+                    out[n].icon = d->icon;
+                    out[n].subtitle = d->subtitle;
+                    n++;
+                }
                 y += 26;
-                if (n >= maxitems) break;
             }
+            if (!any) continue;
         }
     } else {
-        /* system page */
         static const char *labels[4] = { "Reboot OS", "Trigger Kernel Panic", "Shutdown", "Back to programs" };
+        static const int icons[4] = { 4, 5, 7, 11 };
         for (i = 0; i < 4; i++) {
             if (y + 30 > limit) break;
-            out[n].r = (wm_rect_t){ m.x + 10, y, m.w - 20, 30 };
-            out[n].app_index = -1;
-            out[n].action = (i == 0) ? 1 : (i == 1) ? 2 : (i == 2) ? 3 : 4;
-            n++;
+            if (n < maxrows) {
+                out[n].r = (wm_rect_t){ m.x + 8, y, m.w - 16, 30 };
+                out[n].kind = 2;
+                out[n].app_index = -1;
+                out[n].action = (i == 0) ? 1 : (i == 1) ? 2 : (i == 2) ? 3 : 4;
+                out[n].label = labels[i];
+                out[n].icon = icons[i];
+                out[n].subtitle = "";
+                n++;
+            }
             y += 34;
-            (void)labels;
         }
     }
     return n;
@@ -554,8 +600,19 @@ static u32  g_backdrop_built;        /* generation currently in the buffer     *
 static int  g_backdrop_valid;
 
 /* Apps and the theme service call this whenever something that feeds the
-   wallpaper changes.  Cheap enough to call unconditionally. */
-void wm_invalidate_backdrop(void) { g_backdrop_gen++; g_backdrop_valid = 0; }
+   wallpaper changes.  Cheap enough to call unconditionally.
+ *
+ * Bumping the generation only rebuilds the cache; it does not schedule a
+ * repaint.  That was invisible while every frame redrew the whole screen, but
+ * with the damage-rect compositor a wallpaper or theme change repainted
+ * nothing at all until the next unrelated event -- `wallpaper 5` printed
+ * "Cyber Grid -> Deep Space Nebula" and the desktop stayed identical.  A
+ * full-damage request has to accompany the cache invalidation. */
+void wm_invalidate_backdrop(void) {
+    g_backdrop_gen++;
+    g_backdrop_valid = 0;
+    wm_damage_all();
+}
 
 static void paint_backdrop_cached(void) {
     int y;
@@ -781,6 +838,7 @@ static void wm_snap_window(int id, int side) {
     else           w->frame = (wm_rect_t){ SCREEN_W / 2, 0, SCREEN_W / 2, SCREEN_H - WM_TASKBAR };
     w->win_state = WIN_OPEN;
     wm_layout_window(w);
+    wm_damage_all();
 }
 
 static void ctx_run(int action) {
@@ -1198,10 +1256,7 @@ static void paint_taskbar(void) {
 static void paint_start_menu(void) {
     theme_t *t = theme_get();
     wm_rect_t m = start_menu_rect();
-    start_item_t items[48];
-    int n = start_menu_items(items, 48);
     int i;
-    int y;
 
     gfx_shadow(m.x, m.y, m.w, m.h, 12, 14, 200);
     gfx_round_rect(m.x, m.y, m.w, m.h, 12, RGBA(14, 20, 32, 252));
@@ -1212,50 +1267,25 @@ static void paint_start_menu(void) {
     gfx_draw_icon(1, m.x + 12, m.y + 10, 22);
     gfx_text(m.x + 42, m.y + 8, "AE", t->text, 2);
     gfx_text(m.x + 42, m.y + 27, AE_VERSION_STR "  --  " AE_CODENAME, t->text_dim, 0);
-    (void)n;
 
-    y = m.y + 46;
-    if (g_wm.start_page == 0) {
-        int list_limit = m.y + m.h - 42;
-        int cat;
-        static const char *cat_names[4] = { "SYSTEM", "DEVELOPMENT", "GRAPHICS", "UTILITIES" };
-        for (cat = 0; cat < 4; cat++) {
-            int any = 0;
-            for (i = 0; i < APP_COUNT && i < 48; i++) {
-                const app_desc_t *d = app_by_index(i);
-                if (d->category != cat) continue;
-                if (!any) {
-                    gfx_text(m.x + 12, y + 4, cat_names[cat], t->text_mute, 0);
-                    y += 20;
-                    any = 1;
-                }
-                if (y + 26 > list_limit) break;
-                {
-                    wm_rect_t ir = { m.x + 8, y, m.w - 16, 26 };
-                    int hover = (g_wm.mouse_px >= ir.x && g_wm.mouse_px < ir.x + ir.w &&
-                                 g_wm.mouse_py >= ir.y && g_wm.mouse_py < ir.y + ir.h);
-                    if (hover) gfx_round_rect(ir.x, ir.y, ir.w, ir.h, 6, t->sel);
-                    gfx_draw_icon(d->icon, ir.x + 6, ir.y + 5, 16);
-                    gfx_text(ir.x + 30, ir.y + 4, d->name, t->text, 1);
-                    gfx_text_right(ir.x + ir.w - 6, ir.y + 5, d->subtitle ? d->subtitle : "",
-                                   t->text_mute, 0);
-                }
-                y += 26;
+    {
+        start_row_t rows[START_MAX_ROWS];
+        int nrows = start_menu_rows(rows, START_MAX_ROWS);
+        for (i = 0; i < nrows; i++) {
+            wm_rect_t ir = rows[i].r;
+            int hover = (g_wm.mouse_px >= ir.x && g_wm.mouse_px < ir.x + ir.w &&
+                         g_wm.mouse_py >= ir.y && g_wm.mouse_py < ir.y + ir.h);
+            if (rows[i].kind == 0) {
+                gfx_text(ir.x + 4, ir.y + 4, rows[i].label, t->text_mute, 0);
+                continue;
             }
+            if (hover) gfx_round_rect(ir.x, ir.y, ir.w, ir.h, 6, t->sel);
+            gfx_draw_icon(rows[i].icon, ir.x + 6, ir.y + (ir.h - 16) / 2, 16);
+            gfx_text(ir.x + 30, ir.y + (ir.h - gfx_text_h(1)) / 2, rows[i].label, t->text, 1);
+            if (rows[i].subtitle && rows[i].subtitle[0])
+                gfx_text_right(ir.x + ir.w - 8, ir.y + (ir.h - gfx_text_h(0)) / 2,
+                               rows[i].subtitle, t->text_mute, 0);
         }
-    } else {
-        static const char *labels[4] = { "Reboot OS", "Trigger Kernel Panic", "Shutdown", "Back to programs" };
-        int icons[4] = { 4, 5, 7, 11 };
-        for (i = 0; i < 4; i++) {
-            int hover = (g_wm.mouse_px >= m.x + 10 && g_wm.mouse_px < m.x + m.w - 10 &&
-                         g_wm.mouse_py >= y && g_wm.mouse_py < y + 30);
-            if (y + 30 > m.y + m.h - 42) break;
-            if (hover) gfx_round_rect(m.x + 10, y, m.w - 20, 30, 6, t->sel);
-            gfx_draw_icon(icons[i], m.x + 20, y + 7, 16);
-            gfx_text(m.x + 46, y + 7, labels[i], t->text, 1);
-            y += 34;
-        }
-
     }
 
     /* footer */
@@ -1276,36 +1306,55 @@ static void paint_toasts(void) {
         u32 now = now_ms();
         int app = 0;
         char lines[3][64];
-        int nl = 0, p = 0, li = 0;
-        int bw, h;
+        int bw, h, pad = 12, max_chars, k, nlines = 1;
         if (!tst) continue;
         if ((i32)(tst->expire_ms - now) < 0) { tst->used = 0; continue; }
         if (tst->expire_ms - now < 500) app = (int)((tst->expire_ms - now) * 255 / 500);
-        /* wrap into up to 3 lines of 44 chars */
+        bw = 320;
+        /* Wrap on real text width instead of a fixed character count.  40
+           characters is ~240 px at this font, so a 300 px box left the message
+           touching the edge; the count also ignored the padding entirely. */
+        max_chars = (bw - 2 * pad) / gfx_text_w("M", 0);
+        if (max_chars < 8) max_chars = 8;
+        for (k = 0; k < 3; k++) lines[k][0] = 0;
         {
-            int k;
-            for (k = 0; k < 3; k++) lines[k][0] = 0;
-            for (k = 0; tst->text[k] && nl < 63 && li < 3; k++) {
-                lines[li][nl++] = tst->text[k];
-                lines[li][nl] = 0;
-                if (nl >= 40 && tst->text[k] == ' ') { li++; nl = 0; }
+            int line = 0, col = 0, last_space = -1;
+            for (k = 0; tst->text[k] && line < 3; k++) {
+                char ch = tst->text[k];
+                if (ch == '\n' || (col >= max_chars && last_space >= 0 && ch == ' ')) {
+                    lines[line][col] = 0;
+                    line++;
+                    col = 0;
+                    last_space = -1;
+                    if (ch == ' ') continue;
+                } else if (col >= max_chars) {
+                    lines[line][col] = 0;
+                    line++;
+                    col = 0;
+                    last_space = -1;
+                }
+                if (line >= 3) break;
+                lines[line][col] = ch;
+                if (ch == ' ') last_space = col;
+                col++;
+                lines[line][col] = 0;
             }
+            nlines = line + 1;
+            if (nlines > 3) nlines = 3;
         }
-        bw = 300;
-        h = 16 + li * 16 + (li ? 16 : 0);
-        (void)p;
-        y -= h + 6;
+        h = 2 * pad - 4 + nlines * 16;
+        y -= h + 8;
         {
             theme_t *t = theme_get();
+            int bx = SCREEN_W - bw - 20;
             u32 col = tst->kind == 1 ? t->ok : tst->kind == 2 ? t->warn : tst->kind == 3 ? t->err : t->accent;
-            gfx_shadow(SCREEN_W - bw - 20, y, bw, h, 8, 8, 120);
-            gfx_round_rect(SCREEN_W - bw - 20, y, bw, h, 8,
-                           RGBA(18, 24, 36, app ? (u32)app : 246));
-            gfx_round_rect_border(SCREEN_W - bw - 20, y, bw, h, 8, col, 1);
-            gfx_round_rect(SCREEN_W - bw - 20, y, 3, h, 1, col);
-            gfx_text_clip(SCREEN_W - bw - 8, y + 6, bw - 20, lines[0], t->text, 0);
-            if (li > 0) gfx_text_clip(SCREEN_W - bw - 8, y + 22, bw - 20, lines[1], t->text_dim, 0);
-            if (li > 1) gfx_text_clip(SCREEN_W - bw - 8, y + 38, bw - 20, lines[2], t->text_dim, 0);
+            gfx_shadow(bx, y, bw, h, 8, 8, 120);
+            gfx_round_rect(bx, y, bw, h, 8, RGBA(18, 24, 36, app ? (u32)app : 246));
+            gfx_round_rect_border(bx, y, bw, h, 8, col, 1);
+            gfx_round_rect(bx, y, 3, h, 1, col);
+            for (k = 0; k < nlines; k++)
+                gfx_text_clip(bx + pad, y + pad - 2 + k * 16, bw - 2 * pad, lines[k],
+                              k == 0 ? t->text : t->text_dim, 0);
         }
     }
 }
@@ -1327,12 +1376,151 @@ static void paint_status_bubble(void) {
     }
 }
 
+/* --------------------------------------------------------------------------
+ *  Damage tracking
+ *
+ *  The compositor used to repaint all 1280x720 pixels every frame whatever had
+ *  changed, and a single window cost ~7 ms because of it.  Nothing on a desktop
+ *  changes that fast: the wallpaper never changes, an unfocused window changes
+ *  only when its own tick says so, and the pointer is composited separately.
+ *
+ *  So each frame now computes what *could* have changed and repaints only that:
+ *
+ *    - a full redraw whenever anything global moved (window opened/closed/moved,
+ *      z-order, focus, menus, theme, wallpaper);
+ *    - the last pointer position (the hotspot plus the sprite's bounding box) --
+ *      because the deferred cursor writes into the framebuffer, the pixels it
+ *      covered must be regenerated every frame;
+ *    - a window when its app requests it (dirty) or when it is the input target,
+ *      since desktop apps repaint on any input they receive.
+ *
+ *  Because the layers are cached in a shadow image, a partial redraw simply
+ *  re-blits the backdrop and each window that intersects the damaged rect --
+ *  which is exactly what a real compositor does, only here it is done in the
+ *  same linear framebuffer.
+ * ------------------------------------------------------------------------ */
+
+static u32  g_damage_gen;            /* bumped by every global change          */
+static u32  g_damage_seen;
+wm_rect_t   g_damage;                /* the rect that must be regenerated      */
+static int  g_composited;            /* a frame has been published             */
+
+void wm_damage_all(void) { g_damage_gen++; }
+
+/* The rect the last wm_render() regenerated; the frame loop passes exactly this
+   to the chassis so a still desktop costs nothing. */
+wm_rect_t wm_last_damage(void) { return g_damage; }
+
+/* The bounding box of the software pointer for a hotspot at (x,y).  The largest
+   sprite is the 20x20 hand, which is drawn from (x-6,y-1); the extra row of
+   slack covers the 1 px outline. */
+static void cursor_bbox(int x, int y, wm_rect_t *out) {
+    out->x = x - 8;
+    out->y = y - 10;
+    out->w = 24;
+    out->h = 26;
+}
+
+static void damage_add(int x, int y, int w, int h) {
+    int x1, y1;
+    if (w <= 0 || h <= 0) return;
+    /* An empty rect takes the new one wholesale.  Merging against a zeroed rect
+       pinned at (0,0) dragged every damaged region back to the screen corner --
+       which quietly turned each one into a half-screen repaint. */
+    if (g_damage.w <= 0 || g_damage.h <= 0) {
+        g_damage = (wm_rect_t){ x, y, w, h };
+        return;
+    }
+    x1 = g_damage.x + g_damage.w;
+    y1 = g_damage.y + g_damage.h;
+    if (x < g_damage.x) g_damage.x = x;
+    if (y < g_damage.y) g_damage.y = y;
+    if (x + w > x1) x1 = x + w;
+    if (y + h > y1) y1 = y + h;
+    g_damage.w = x1 - g_damage.x;
+    g_damage.h = y1 - g_damage.y;
+}
+
+/* Paint one app window, clipped to the damage so a small repaint stays cheap. */
+static void wm_layers_in(int x, int y, int w, int h) {
+    int i;
+    rect_t save;
+    gfx_reset_clip();
+    gfx_push_clip((rect_t){ x, y, w, h });
+    paint_backdrop_cached();
+    paint_desktop_icons();
+    for (i = 0; i < g_wm.count; i++)
+        if (g_wm.win[i].used) paint_window(&g_wm.win[i]);
+    paint_taskbar();
+    save = gfx_get_clip();
+    (void)save;
+    gfx_reset_clip();
+}
+
+/* Called by the chassis once the pointer sprite has been composited, so the
+   next frame knows the framebuffer contains it and lifts it before repainting. */
+void wm_cursor_presented(void) { g_wm.cursor_drawn = 1; }
+
 void wm_render(void) {
     int i;
     theme_t *t = theme_get();
     int mouse_over_start = 0;
+    wm_rect_t cur;
+    int full = 0;
 
+    /* --- decide what changed ------------------------------------------- */
+    if (!g_composited || g_damage_gen != g_damage_seen) {
+        full = 1;
+        g_damage_gen++;
+        g_damage_seen = g_damage_gen;
+    }
+    if (g_wm.start_open || g_wm.ctx_open || g_wm.snap_preview ||
+        g_wm.prev_start_open || g_wm.prev_ctx_open || g_wm.prev_snap_preview) full = 1;
+    /* A moving pointer is *not* a full redraw: the damage rect always contains
+       the pointer's bounding box, and only the pixels it left behind need
+       regenerating. */
+    (void)0;
+    if (g_wm.prev_count != g_wm.count || g_wm.prev_focused != g_wm.focused) full = 1;
+    g_wm.prev_start_open = g_wm.start_open;
+    g_wm.prev_ctx_open = g_wm.ctx_open;
+    g_wm.prev_snap_preview = g_wm.snap_preview;
+    g_wm.prev_mouse_x = g_wm.mouse_px;
+    g_wm.prev_mouse_y = g_wm.mouse_py;
+    g_wm.prev_count = g_wm.count;
+    g_wm.prev_focused = g_wm.focused;
+
+    if (full) {
+        g_damage = (wm_rect_t){ 0, 0, SCREEN_W, SCREEN_H };
+    } else {
+        int input = g_wm.input_win_id;
+        g_damage = (wm_rect_t){ 0, 0, 0, 0 };
+        /* The window that received input repainted itself, and so did every
+           window whose own tick marked it dirty. */
+        for (i = 0; i < g_wm.count; i++) {
+            window_t *w = &g_wm.win[i];
+            if (!w->used || w->win_state == WIN_MIN) continue;
+            if (w->dirty || w->id == input) {
+                damage_add(w->frame.x - 12, w->frame.y - 12,
+                           w->frame.w + 24, w->frame.h + 24);
+                w->dirty = 0;
+            }
+        }
+    }
+
+    /* The pointer is always regenerated, whether it moved or not: its sprite is
+       the last thing written into the framebuffer, so the pixels beneath it are
+       stale and must be rebuilt before it is drawn again. */
+    cursor_bbox(g_wm.mouse_px, g_wm.mouse_py, &cur);
+    damage_add(cur.x, cur.y, cur.w, cur.h);
+
+    if (g_damage.w <= 0 || g_damage.h <= 0) { g_wm.frames++; return; }
+
+    /* --- regenerate the damaged rect ------------------------------------ */
+    /* Lift the pointer sprite first: its pixels are in the framebuffer, and the
+       damaged rect always includes them. */
+    if (g_wm.cursor_drawn) { gfx_cursor_restore(); g_wm.cursor_drawn = 0; }
     gfx_reset_clip();
+    gfx_push_clip((rect_t){ g_damage.x, g_damage.y, g_damage.w, g_damage.h });
     paint_backdrop_cached();
     paint_desktop_icons();
 
@@ -1376,6 +1564,7 @@ void wm_render(void) {
         gfx_set_cursor(g_wm.mouse_px, g_wm.mouse_py, kind);
     }
     g_wm.frames++;
+    g_composited = 1;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1410,22 +1599,24 @@ static void wm_start_action(int app_index, int action) {
 }
 
 static void wm_click_start_menu(int x, int y) {
-    start_item_t items[48];
-    int n = start_menu_items(items, 48);
+    start_row_t rows[START_MAX_ROWS];
+    int n = start_menu_rows(rows, START_MAX_ROWS);
     int i;
     for (i = 0; i < n; i++) {
-        if (x >= items[i].r.x && x < items[i].r.x + items[i].r.w &&
-            y >= items[i].r.y && y < items[i].r.y + items[i].r.h) {
-            wm_start_action(items[i].app_index, items[i].action);
+        if (x >= rows[i].r.x && x < rows[i].r.x + rows[i].r.w &&
+            y >= rows[i].r.y && y < rows[i].r.y + rows[i].r.h) {
+            if (rows[i].kind == 1) wm_start_action(rows[i].app_index, 0);
+            else if (rows[i].kind == 2) wm_start_action(-1, rows[i].action);
             return;
         }
     }
-    /* corner buttons: title bar area toggles the system page */
+    /* the header toggles the system page */
     if (y < start_menu_rect().y + 44) {
         g_wm.start_page = g_wm.start_page ? 0 : 1;
         return;
     }
-    g_wm.start_open = 0;
+    /* a click anywhere else in the menu is swallowed, not a dismissal; only a
+       click outside closes it (handled by the caller) */
 }
 
 void wm_on_mouse_move(int x, int y, int buttons) {
@@ -1457,6 +1648,7 @@ void wm_on_mouse_move(int x, int y, int buttons) {
             w->frame.x = k_clamp(nx, -w->frame.w + 120, SCREEN_W - 120);
             w->frame.y = k_clamp(ny, 0, SCREEN_H - WM_TASKBAR - 40);
             wm_layout_window(w);
+            wm_damage_all();
             g_wm.snap_preview = 0;
             if (y <= 2) g_wm.snap_preview = 3;
             else if (x <= 2) g_wm.snap_preview = 1;
@@ -1483,6 +1675,7 @@ void wm_on_mouse_move(int x, int y, int buttons) {
             w->frame.w = nw;
             w->frame.h = nh;
             wm_layout_window(w);
+            wm_damage_all();
         }
         return;
     }
@@ -1736,6 +1929,7 @@ void wm_on_mouse_up(int x, int y, int button) {
             else if (snap == 3) w->frame = (wm_rect_t){ 0, 0, SCREEN_W, SCREEN_H - WM_TASKBAR };
             w->win_state = (snap == 3) ? WIN_MAXIMIZED : WIN_OPEN;
             wm_layout_window(w);
+            wm_damage_all();
         }
         g_wm.snap_preview = 0;
     }

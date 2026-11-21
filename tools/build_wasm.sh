@@ -44,6 +44,7 @@ MODULES=(
   dev/67_procfs.c
   dev/70_bytecode.c
   dev/75_registry.c
+  dev/76_mcp.c
   dev/80_wm.c
   dev/85_app_sh.c
   dev/86_app_sysmon.c

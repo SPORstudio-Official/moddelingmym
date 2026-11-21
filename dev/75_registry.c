@@ -2,7 +2,7 @@
  *  REGISTRY -- theme service, application registry, notifications, clipboard
  * ========================================================================== */
 
-typedef struct { int x, y, w, h; } wm_rect_t;
+/* wm_rect_t is declared once, in 00_prelude.c. */
 
 /* The compositor caches the static wallpaper; anything that changes it has to
    say so or the desktop keeps showing the previous one.  Defined in 80_wm.c --

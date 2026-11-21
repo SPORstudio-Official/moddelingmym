@@ -216,7 +216,9 @@ static void cmd_biggest(shell_t *sh, int argc, char **argv) {
     struct { char path[96]; u32 size; } top[8];
     int i, j;
     int ndirs = 1, walked = 0;
-    char queue[32][VFS_MAX_PATH];
+    /* File scope, not automatic: a frame over 4 KB needs ___chkstk_ms on
+       Win64 and the freestanding kernel link has no provider for it. */
+    static char queue[32][VFS_MAX_PATH];
     kmemset(top, 0, sizeof(top));
     kstrncpy(queue[0], root, sizeof(queue[0]) - 1);
     while (ndirs > 0 && walked < 400) {
@@ -406,7 +408,7 @@ static void cmd_grab(shell_t *sh, int argc, char **argv) {
 /* `where <file>` -- which directory holds this name.  `find` takes a name and
    searches from here; `where` takes a name and tells you the path. */
 static void cmd_where(shell_t *sh, int argc, char **argv) {
-    char queue[24][VFS_MAX_PATH];
+    static char queue[24][VFS_MAX_PATH];   /* see cmd_biggest: keep frames < 4 KB */
     int nq = 1, seen = 0;
     if (argc < 2) { sh_emit(sh, TC_RED, "usage: where <name>\n"); return; }
     kstrcpy(queue[0], "/");

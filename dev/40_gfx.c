@@ -279,11 +279,20 @@ void gfx_radial_glow(int cx, int cy, int radius, u32 color) {
 /* -------------------------------------------------------------------------- */
 
 /* Coverage of a pixel by the rounded rect, computed with 4x4 subsamples. */
+/* Rounded rectangle fill / outline.
+ *
+ * The previous version walked every pixel of the bounding box and, for an
+ * outline, still visited (and tested) the entire interior -- so a 1134x686
+ * window border cost ~1 ms of the frame for 2,600 pixels actually drawn.  The
+ * outline is now emitted as four corner arcs plus four straight runs, and the
+ * fill as one horizontal span per row, which is what the shape actually is.
+ */
 static void gfx_round_rect_ex(int x, int y, int w, int h, int radius, u32 color,
                               int border_only, int border_width, u32 border_color,
                               int inset_shadow) {
-    int yy, xx;
+    int yy;
     rect_t r;
+    int x1 = x + w, y1 = y + h;
     if (w <= 0 || h <= 0) return;
     if (radius < 0) radius = 0;
     if (radius * 2 > w) radius = w / 2;
@@ -291,55 +300,89 @@ static void gfx_round_rect_ex(int x, int y, int w, int h, int radius, u32 color,
     r = rect_intersect(rect_make(x, y, w, h), g_clip);
     if (rect_empty(&r)) return;
 
-    for (yy = r.y; yy < r.y + r.h; yy++) {
-        for (xx = r.x; xx < r.x + r.w; xx++) {
-            int lx = xx - x, ly = yy - y;
-            int cx = 0, cy = 0;
-            int on_corner = 0;
-            int dist_from_edge;
-            if (lx < radius && ly < radius) { cx = radius; cy = radius; on_corner = 1; }
-            else if (lx >= w - radius && ly < radius) { cx = w - radius - 1; cy = radius; on_corner = 1; }
-            else if (lx < radius && ly >= h - radius) { cx = radius; cy = h - radius - 1; on_corner = 1; }
-            else if (lx >= w - radius && ly >= h - radius) { cx = w - radius - 1; cy = h - radius - 1; on_corner = 1; }
-            if (on_corner) {
-                double dx = (double)lx - (double)cx;
-                double dy = (double)ly - (double)cy;
-                double d = k_sqrt(dx * dx + dy * dy);
-                double cov = (double)radius + 0.5 - d;
-                if (cov <= 0.0) continue;
-                if (cov > 1.0) cov = 1.0;
-                {
-                    int alpha = (int)(cov * 255.0);
-                    u32 *p = &g_vram[yy * g_fb_pitch + xx];
-                    if (border_only) {
-                        int bw = border_width;
-                        double inner = d - (double)(radius - bw);
-                        if (inner < 0.5) {
-                            double bcov = inner + 0.5;
-                            if (bcov < 0) bcov = 0;
-                            if (bcov > 1) bcov = 1;
-                            *p = gfx_blend(*p, RGBA(RED(border_color), GREEN(border_color),
-                                                    BLUE(border_color), (int)(bcov * ALPHA(border_color))), 255);
-                        }
-                    } else {
-                        *p = gfx_blend(*p, color, alpha);
-                    }
-                }
-                continue;
+    if (!border_only) {
+        for (yy = r.y; yy < r.y + r.h; yy++) {
+            int ly = yy - y;
+            int inset = 0;
+            if (ly < radius) {
+                double dy = (double)(radius - 1 - ly);
+                inset = radius - (int)(k_sqrt((double)(radius * radius) - dy * dy) + 0.5);
+            } else if (ly >= h - radius) {
+                double dy = (double)(ly - (h - radius));
+                inset = radius - (int)(k_sqrt((double)(radius * radius) - dy * dy) + 0.5);
             }
-            if (border_only) {
-                dist_from_edge = k_min(k_min(lx, w - 1 - lx), k_min(ly, h - 1 - ly));
-                if (dist_from_edge < border_width) {
-                    gfx_pixel(xx, yy, border_color);
-                } else if (inset_shadow) {
-                    /* subtle inner top highlight */
-                    if (dist_from_edge == border_width)
-                        gfx_pixel(xx, yy, RGBA(255, 255, 255, 10));
-                }
-            } else {
-                gfx_pixel(xx, yy, color);
+            if (inset < 0) inset = 0;
+            /* Full-width interior rows take the fast path; the rounded rows are
+               narrower and go through the span fill, which also clips. */
+            if (inset == 0 && r.x == x && r.w == w) gfx_hline(x, yy, w, color);
+            else gfx_hline(x + inset, yy, w - 2 * inset, color);
+        }
+        return;
+    }
+
+    /* Outline: four straight runs plus four anti-aliased corner arcs. */
+    if (border_width <= 0) return;
+    {
+        int bw = border_width;
+        int top = y + radius, bot = y1 - radius - 1;
+        int i;
+        /* verticals */
+        for (i = top; i <= bot; i++) {
+            int k;
+            for (k = 0; k < bw; k++) {
+                gfx_pixel(x + k, i, border_color);
+                gfx_pixel(x1 - 1 - k, i, border_color);
             }
         }
+        /* horizontals */
+        for (i = x + radius; i < x1 - radius; i++) {
+            int k;
+            for (k = 0; k < bw; k++) {
+                gfx_pixel(i, y + k, border_color);
+                gfx_pixel(i, y1 - 1 - k, border_color);
+            }
+        }
+        /* Corners: only the quarter of the arc's box that belongs to this
+           corner is walked (all four quadrants at once drew four full rings). */
+        {
+            int ci;
+            for (ci = 0; ci < 4; ci++) {
+                int left  = (ci == 0 || ci == 2);
+                int upper = (ci < 2);
+                int cx = left ? x + radius : x1 - radius - 1;
+                int cy = upper ? y + radius : y1 - radius - 1;
+                int bx0 = left ? cx - radius : cx;
+                int bx1 = left ? cx + 1 : cx + radius + 1;
+                int by0 = upper ? cy - radius : cy;
+                int by1 = upper ? cy + 1 : cy + radius + 1;
+                rect_t cr = rect_intersect(rect_make(bx0, by0, bx1 - bx0, by1 - by0), g_clip);
+                int ax, ay;
+                if (rect_empty(&cr)) continue;
+                for (ay = cr.y; ay < cr.y + cr.h; ay++) {
+                    int dy = ay - cy;
+                    for (ax = cr.x; ax < cr.x + cr.w; ax++) {
+                        int dx = ax - cx;
+                        double d = k_sqrt((double)(dx * dx + dy * dy));
+                        double cov = (double)radius + 0.5 - d;      /* outer edge */
+                        double inner = d - (double)(radius - bw) + 0.5;
+                        double bcov;
+                        u32 *p2;
+                        if (cov <= 0.0) continue;
+                        if (inner < 0.0) inner = 0.0;
+                        bcov = inner < cov ? inner : cov;
+                        if (bcov <= 0.0) continue;
+                        if (bcov > 1.0) bcov = 1.0;
+                        p2 = &g_vram[ay * g_fb_pitch + ax];
+                        *p2 = gfx_blend(*p2, RGBA(RED(border_color), GREEN(border_color),
+                                                  BLUE(border_color), (int)(bcov * ALPHA(border_color))), 255);
+                    }
+                }
+            }
+        }
+    }
+    if (inset_shadow) {
+        int i;
+        for (i = x + radius; i < x1 - radius; i++) gfx_pixel(i, y + border_width, RGBA(255, 255, 255, 10));
     }
 }
 
@@ -502,9 +545,35 @@ static void shadow_ring(int x, int y, int w, int h, int radius, u32 color) {
  * then on.  Dragging a window moves it without touching the cache; only a
  * resize rebuilds it, which is exactly when the cost is already being paid.
  */
-static u32 *g_shw_tile;                 /* lazily grown scratch bitmap         */
-static int  g_shw_tile_cap;
-static int  g_shw_cw, g_shw_ch, g_shw_cr, g_shw_cs, g_shw_cst;
+/* Two tiles, not one.  A window's shadow and the (tiny) shadow under a popup
+   are both drawn every frame, and a single cache entry meant each one evicted
+   the other on every call -- so both were rebuilt, every frame, forever. */
+#define SHW_SLOTS 2
+typedef struct {
+    u32 *tile;
+    int  cap;                   /* words allocated                         */
+    int  w, h, r, sp;           /* geometry this tile was built for        */
+    int  valid;
+} shw_slot_t;
+static shw_slot_t g_shw[SHW_SLOTS];
+static int g_shw_next;          /* round-robin victim                      */
+
+/* Pick the slot that already holds this geometry, else recycle one.  Never
+   choose the geometry the *other* frame just asked for if either slot matches. */
+static shw_slot_t *shw_slot_for(int w, int h, int r, int sp) {
+    int i;
+    for (i = 0; i < SHW_SLOTS; i++)
+        if (g_shw[i].valid && g_shw[i].w == w && g_shw[i].h == h &&
+            g_shw[i].r == r && g_shw[i].sp == sp)
+            return &g_shw[i];
+    for (i = 0; i < SHW_SLOTS; i++)
+        if (!g_shw[i].valid) return &g_shw[i];
+    {
+        shw_slot_t *victim = &g_shw[g_shw_next % SHW_SLOTS];
+        g_shw_next++;
+        return victim;
+    }
+}
 
 /* Alpha accumulation for the shadow tile.
  *
@@ -565,14 +634,17 @@ static void shadow_tile_ring(int x, int y, int w, int h, int radius, int a_ring)
 
 void gfx_shadow(int x, int y, int w, int h, int radius, int spread, int strength) {
     int i, tw, th, pad;
+    shw_slot_t *slot;
     if (spread <= 0 || w <= 0 || h <= 0) return;
     pad = spread + spread / 3 + 2;
     tw = w + 2 * pad;
     th = h + 2 * pad;
+    slot = shw_slot_for(w, h, radius, spread);
 
-    if (!(g_shw_tile && g_shw_cw == w && g_shw_ch == h && g_shw_cr == radius &&
-          g_shw_cs == spread && g_shw_cst == strength)) {
-        if (g_shw_tile_cap < tw * th) {
+    /* The tile stores full coverage; the caller's `strength` is applied while
+       blitting, so one tile serves both a focused and an unfocused window. */
+    if (!slot->valid) {
+        if (slot->cap < tw * th) {
             extern void *mm_kmalloc(u32 size);
             u32 *nt = (u32 *)mm_kmalloc((u32)(tw * th) * 4u);
             if (!nt) {
@@ -585,16 +657,16 @@ void gfx_shadow(int x, int y, int w, int h, int radius, int spread, int strength
                 }
                 return;
             }
-            g_shw_tile = nt;
-            g_shw_tile_cap = tw * th;
+            slot->tile = nt;
+            slot->cap = tw * th;
         }
         {
             rect_t save_clip = g_clip;
-            kmemset(g_shw_tile, 0, (size_t)(tw * th) * 4u);
-            fb_bind_offscreen(g_shw_tile, tw, th);
+            kmemset(slot->tile, 0, (size_t)(tw * th) * 4u);
+            fb_bind_offscreen(slot->tile, tw, th);
             gfx_reset_clip();
             for (i = spread; i >= 1; i--) {
-                int a = (strength * (spread - i + 1) * (spread - i + 1)) / (spread * spread + 1);
+                int a = (255 * (spread - i + 1) * (spread - i + 1)) / (spread * spread + 1);
                 int inset = spread - i;
                 shadow_tile_ring(pad + spread - i + inset, pad + spread - i + inset + spread / 3,
                                  w + 2 * i - 2 * inset, h + 2 * i - 2 * inset, radius + i, a);
@@ -602,32 +674,37 @@ void gfx_shadow(int x, int y, int w, int h, int radius, int spread, int strength
             fb_bind_screen();
             g_clip = save_clip;
         }
-        g_shw_cw = w; g_shw_ch = h; g_shw_cr = radius;
-        g_shw_cs = spread; g_shw_cst = strength;
+        slot->w = w; slot->h = h; slot->r = radius; slot->sp = spread;
+        slot->valid = 1;
     }
 
-    /* Blit: the tile carries coverage in its alpha channel and black in its
-       rgb, which is exactly what an overlay wants. */
+    /* Blit: coverage lives in the tile's alpha channel and black in its rgb,
+       which is exactly what an overlay wants.  Only the part inside the current
+       clip is touched, so a small repaint costs a small blit. */
     {
         int oy, ox;
         rect_t r = rect_intersect(rect_make(x - pad, y - pad, tw, th), g_clip);
+        int bx = x - pad, by = y - pad;
         if (r.w <= 0 || r.h <= 0) return;
-        for (oy = r.y - (y - pad); oy < r.y - (y - pad) + r.h; oy++) {
-            int py = (y - pad) + oy;
+        for (oy = r.y - by; oy < r.y - by + r.h; oy++) {
+            int py = by + oy;
+            const u32 *row;
+            u32 *dst;
             if (oy < 0 || oy >= th || py < 0 || py >= g_fb_h) continue;
-            for (ox = r.x - (x - pad); ox < r.x - (x - pad) + r.w; ox++) {
-                int px = (x - pad) + ox;
+            row = &slot->tile[oy * tw];
+            dst = &g_vram[py * g_fb_pitch];
+            for (ox = r.x - bx; ox < r.x - bx + r.w; ox++) {
+                int px = bx + ox;
                 u32 c;
                 if (ox < 0 || ox >= tw || px < 0 || px >= g_fb_w) continue;
-                c = g_shw_tile[oy * tw + ox];
-                if (ALPHA(c)) {
-                    u32 *p = &g_vram[py * g_fb_pitch + px];
-                    *p = gfx_blend(*p, c, 255);
-                }
+                c = row[ox];
+                if (ALPHA(c))
+                    dst[px] = gfx_blend(dst[px], RGBA(0, 0, 0, (int)((ALPHA(c) * strength) / 255)), 255);
             }
         }
     }
 }
+
 
 /* -------------------------------------------------------------------------- */
 /*  Lines and circles                                                        */
@@ -1182,12 +1259,60 @@ void gfx_draw_cursor(int x, int y, int kind);   /* defined below */
 static int g_cursor_x = -1, g_cursor_y = -1, g_cursor_kind;
 static int g_cursor_enabled = 1;
 
+/* The pixels the sprite covers, kept from the moment it is composited.  A
+   partial repaint regenerates only the damaged rect, so without this the pixels
+   the pointer was drawn over would be repainted from the shadow *of the sprite
+   itself* -- every moved pointer would smear a trail of cursors across the
+   desktop.  Restoring first means the layers underneath are always the real
+   thing. */
+#define CURSOR_SAVE_W 32
+#define CURSOR_SAVE_H 32
+static u32 g_cursor_save[CURSOR_SAVE_W * CURSOR_SAVE_H];
+static int g_cursor_save_x, g_cursor_save_y, g_cursor_saved;
+
+/* Top-left of the saved block for a hotspot; shared by save and restore.  The
+   block is deliberately larger than the widest sprite (the 20 px hand drawn
+   from x-6, y-1). */
+static void cursor_save_origin(int x, int y, int *ox, int *oy) {
+    *ox = x - 8;
+    *oy = y - 10;
+}
+static int cursor_save_visible(int ox, int oy) {
+    if (ox < 0 || oy < 0) return 0;
+    if (ox + CURSOR_SAVE_W > g_fb_w || oy + CURSOR_SAVE_H > g_fb_h) return 0;
+    return 1;
+}
+
+void gfx_cursor_restore(void) {
+    int r, c;
+    if (!g_cursor_saved) return;
+    g_cursor_saved = 0;
+    if (!cursor_save_visible(g_cursor_save_x, g_cursor_save_y)) return;
+    for (r = 0; r < CURSOR_SAVE_H; r++) {
+        u32 *dst = &g_vram[(g_cursor_save_y + r) * g_fb_pitch + g_cursor_save_x];
+        const u32 *src = &g_cursor_save[r * CURSOR_SAVE_W];
+        for (c = 0; c < CURSOR_SAVE_W; c++) dst[c] = src[c];
+    }
+}
+
 void gfx_set_cursor(int x, int y, int kind) {
     g_cursor_x = x; g_cursor_y = y; g_cursor_kind = kind;
 }
 void gfx_cursor_hide(int hide) { g_cursor_enabled = hide ? 0 : 1; }
 void gfx_composite_cursor(void) {
+    int r, c, ox, oy;
     if (!g_cursor_enabled || g_cursor_x < 0) return;
+    cursor_save_origin(g_cursor_x, g_cursor_y, &ox, &oy);
+    if (cursor_save_visible(ox, oy)) {
+        for (r = 0; r < CURSOR_SAVE_H; r++) {
+            const u32 *src = &g_vram[(oy + r) * g_fb_pitch + ox];
+            u32 *dst = &g_cursor_save[r * CURSOR_SAVE_W];
+            for (c = 0; c < CURSOR_SAVE_W; c++) dst[c] = src[c];
+        }
+        g_cursor_save_x = ox;
+        g_cursor_save_y = oy;
+        g_cursor_saved = 1;
+    }
     gfx_draw_cursor(g_cursor_x, g_cursor_y, g_cursor_kind);
 }
 

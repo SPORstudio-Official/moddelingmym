@@ -281,20 +281,38 @@ const AetherHost = (() => {
           return BigInt(Math.round(performance.now() * 1000));
         },
 
-        js_present() {
-          /* Copy the module's framebuffer into an ImageData.  The kernel stores
-           0xAARRGGBB; canvas ImageData wants RGBA byte order. */
+        /* Convert rows [y0, y1) of the module's framebuffer into the packed
+           RGBA buffer the canvas wants.  The kernel stores 0xAARRGGBB, i.e. the
+           bytes in memory are B,G,R,A -- so R and B are swapped on the way out.
+           Only the damaged region is converted and uploaded; converting all
+           921,600 pixels every frame was the browser build's biggest cost. */
+        js_present_rect(x, y, w, h) {
           const mem = new Uint8Array(inst.memory.buffer);
-          const src = vram;
           const dst = imageData.data;
-          for (let i = 0, o = 0; i < W * H; i++, o += 4) {
-            const p = src + i * 4;
-            dst[o] = mem[p + 2];      /* R (from BGR word order) */
-            dst[o + 1] = mem[p + 1];  /* G */
-            dst[o + 2] = mem[p];      /* B */
-            dst[o + 3] = 255;         /* opaque */
+          const y0 = Math.max(0, y | 0);
+          const y1 = Math.min(H, (y | 0) + (h | 0));
+          const x0 = Math.max(0, x | 0);
+          const x1 = Math.min(W, (x | 0) + (w | 0));
+          if (x1 <= x0 || y1 <= y0) return;
+          for (let row = y0; row < y1; row++) {
+            let p = vram + row * W * 4 + x0 * 4;
+            let o = (row * W + x0) * 4;
+            for (let c = x0; c < x1; c++, p += 4, o += 4) {
+              dst[o] = mem[p + 2];
+              dst[o + 1] = mem[p + 1];
+              dst[o + 2] = mem[p];
+              dst[o + 3] = 255;
+            }
           }
-          ctx.putImageData(imageData, 0, 0);
+          /* putImageData takes a dirty rect in device pixels, so only the
+             converted region is pushed to the compositor. */
+          ctx.putImageData(imageData, 0, 0, x0, y0, x1 - x0, y1 - y0);
+        },
+
+        /* Whole-surface present.  Used by the boot and panic screens, which
+           repaint everything. */
+        js_present() {
+          this.js_present_rect(0, 0, W, H);
         },
 
         js_poll_event(ptr) {

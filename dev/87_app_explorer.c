@@ -541,24 +541,35 @@ static void exp_paint_prompt(explorer_t *ex, wm_rect_t c, theme_t *t, int y) {
         ex->prompt == EXP_PROMPT_NEW_FILE ? "File name:" :
         ex->prompt == EXP_PROMPT_NEW_DIR  ? "Folder name:" :
         ex->prompt == EXP_PROMPT_RENAME   ? "Rename to:" : "Name:";
+    /* The hint, and the width it actually needs.  The old layout reserved a flat
+       150 px for it and let the input box take whatever was left, so on a
+       normal-width window the hint ran past the client edge and was clipped
+       mid-word -- the box looked like it overlapped the frame. */
+    const char *hint = "Enter - create    Esc - cancel";
+    int hint_w = gfx_text_w(hint, 0) + 12;
+    int label_w = gfx_text_w(label, 0) + 8;
     int x = c.x + 12;
+    int box_x, box_w;
+
     gfx_fill_rect(c.x, y, c.w, 26, RGBA(14, 20, 30, 252));
     gfx_fill_rect(c.x, y, 3, 26, t->accent);
     gfx_text(x, y + 7, label, t->text_dim, 0);
-    x += gfx_text_w(label, 0) + 8;
-    {
-        int bw = c.w - (x - c.x) - 150;
-        if (bw < 120) bw = 120;
-        gfx_round_rect(x, y + 3, bw, 20, 4, RGBA(8, 12, 18, 240));
-        gfx_round_rect_border(x, y + 3, bw, 20, 4, t->accent, 1);
-        gfx_text_clip(x + 6, y + 7, bw - 12, ex->prompt_buf, t->text, 0);
-        if (((now_ms() / 500) & 1)) {
-            int cx = x + 6 + gfx_text_w(ex->prompt_buf, 0) + 1;
-            if (cx < x + bw - 6) gfx_fill_rect(cx, y + 6, 1, 14, t->accent);
-        }
-        x += bw + 8;
+    x += label_w;
+
+    box_x = x;
+    box_w = c.w - (box_x - c.x) - hint_w - 10;
+    if (box_w < 90) box_w = 90;
+
+    gfx_round_rect(box_x, y + 3, box_w, 20, 4, RGBA(8, 12, 18, 240));
+    gfx_round_rect_border(box_x, y + 3, box_w, 20, 4, t->accent, 1);
+    gfx_text_clip(box_x + 6, y + 7, box_w - 12, ex->prompt_buf, t->text, 0);
+    if (((now_ms() / 500) & 1)) {
+        int cx = box_x + 6 + gfx_text_w(ex->prompt_buf, 0) + 1;
+        if (cx < box_x + box_w - 6) gfx_fill_rect(cx, y + 6, 1, 14, t->accent);
     }
-    gfx_text(x, y + 7, "Enter - create    Esc - cancel", t->text_mute, 0);
+    /* only draw the hint when there is genuinely room for it */
+    if (box_x + box_w + 8 + gfx_text_w(hint, 0) <= c.x + c.w - 6)
+        gfx_text(box_x + box_w + 8, y + 7, hint, t->text_mute, 0);
 }
 
 static void exp_paint_props(explorer_t *ex, wm_rect_t c, theme_t *t) {
@@ -690,20 +701,25 @@ static void explorer_paint(void *state, window_t *w, wm_rect_t c) {
             gfx_round_rect(r.x, r.y, r.w, r.h, 6, i == ex->selected ? t->sel : RGBA(0, 0, 0, 0));
             if (d->type == FT_DIR) gfx_draw_icon(ICON_FOLDER, r.x + r.w / 2 - 18, r.y + 10, 36);
             else gfx_draw_icon(gfx_icon_for_path(d->name, d->type == FT_DIR, d->type == FT_PROC, 0), r.x + r.w / 2 - 18, r.y + 10, 36);
-            gfx_text_center(r.x + r.w / 2, r.y + 52, d->name, t->text, 0);
+            /* Long names used to run under the next tile and over the size
+               line.  Clip to the cell instead: a truncated name is honest, an
+               overlapping one is a bug. */
+            gfx_text_clip(r.x + 4, r.y + 52, r.w - 8, d->name, t->text, 0);
             {
                 vfs_inode_t st;
                 char full[EXP_PATH_MAX];
                 char sz[24];
+                int tw;
                 kmemset(&st, 0, sizeof(st));
                 exp_join(full, sizeof(full), ex->path, d->name);
                 vfs_stat_path(full, &st);
                 if (ex->clip_kind && !kstrcmp(ex->clip_path, full)) on_clip = 1;
-                if (d->type == FT_DIR) gfx_text_center(r.x + r.w / 2, r.y + 66, "<dir>", t->text_mute, 0);
-                else {
-                    ksnprintf(sz, sizeof(sz), "%u B", (unsigned)st.size);
-                    gfx_text_center(r.x + r.w / 2, r.y + 66, sz, t->text_mute, 0);
-                }
+                if (d->type == FT_DIR) kstrcpy(sz, "<dir>");
+                else ksnprintf(sz, sizeof(sz), "%u B", (unsigned)st.size);
+                /* centre, but never wider than the cell */
+                tw = gfx_text_w(sz, 0);
+                if (tw > r.w - 8) { gfx_text_clip(r.x + 4, r.y + 66, r.w - 8, sz, t->text_mute, 0); }
+                else gfx_text_center(r.x + r.w / 2, r.y + 66, sz, t->text_mute, 0);
             }
             if (on_clip)
                 gfx_round_rect_border(r.x, r.y, r.w, r.h, 6,
@@ -722,7 +738,7 @@ static void explorer_paint(void *state, window_t *w, wm_rect_t c) {
             if (i == ex->selected) gfx_fill_rect(c.x + 8, y, c.w - 16, row_h, t->sel);
             gfx_draw_icon(d->type == FT_DIR ? ICON_FOLDER : gfx_icon_for_path(d->name, d->type == FT_DIR, d->type == FT_PROC, 0),
                           c.x + 14, y + 3, 16);
-            gfx_text(c.x + 38, y + 4, d->name, t->text, 0);
+            gfx_text_clip(c.x + 38, y + 4, c.w - 120, d->name, t->text, 0);
             kmemset(&st, 0, sizeof(st));
             exp_join(full, sizeof(full), ex->path, d->name);
             vfs_stat_path(full, &st);
@@ -851,16 +867,34 @@ static void explorer_key(void *state, int key, int ch, int mods) {
     if (ch == 's') { ex->sort_mode = (ex->sort_mode + 1) % 3; exp_refresh(ex); }
 }
 
+/* Where a click landed, in the same coordinates the painter uses.
+ *
+ * The painter draws with absolute screen coordinates (client rect origin plus
+ * an offset); the click handler used to compare the absolute y against bare
+ * constants like `y < 36`, which only ever matched a window sitting at the top
+ * of the screen.  For any normally placed window the entire toolbar, the view
+ * switch and the list rows were unreachable -- the window looked interactive
+ * and ignored every click.  Everything below now works in client space, and
+ * the hit tests mirror the exact expressions used while painting. */
 static void explorer_mouse(void *state, int event, int x, int y, int button, int wheel) {
     explorer_t *ex = (explorer_t *)state;
     wm_rect_t c = wm_input_client_rect();
+    int rx, ry;
     (void)button;
-    if (event == APP_EV_WHEEL) { ex->scroll = k_max(0, ex->scroll - wheel); return; }
+
+    if (c.w <= 0) return;
+    rx = x - c.x;
+    ry = y - c.y;
+
+    if (event == APP_EV_WHEEL) {
+        ex->scroll = k_max(0, ex->scroll - wheel);
+        return;
+    }
     if (event != APP_EV_MOUSE_DOWN && event != APP_EV_MOUSE_DBLCLICK) return;
 
-    /* ---- toolbar -------------------------------------------------------- */
-    if (y < 36) {
-        if (x >= 8 && x < 8 + EXP_TOOL_H) { exp_navigate(ex, ".."); return; }
+    /* ---- toolbar: up button, breadcrumbs, action buttons ---------------- */
+    if (ry >= 6 && ry < 6 + EXP_TOOL_H) {
+        if (rx >= 8 && rx < 8 + EXP_TOOL_H) { exp_navigate(ex, ".."); return; }
         {
             int i;
             for (i = 0; i < EXP_TOOL_COUNT; i++) {
@@ -872,10 +906,13 @@ static void explorer_mouse(void *state, int event, int x, int y, int button, int
                     case 2:
                         if (ex->selected < ex->nent)
                             exp_begin_prompt(ex, EXP_PROMPT_RENAME, ex->ent[ex->selected].name);
+                        else
+                            exp_set_status1(ex, 2, "select an item to rename");
                         break;
                     case 3: exp_clip(ex, 1); break;
                     case 4: exp_clip(ex, 2); break;
                     case 5: exp_paste(ex); break;
+                    default: break;
                     }
                     return;
                 }
@@ -884,7 +921,7 @@ static void explorer_mouse(void *state, int event, int x, int y, int button, int
         /* breadcrumb click zones, rebuilt from the path exactly as painted */
         {
             char tmp[EXP_PATH_MAX];
-            int cx = 8 + EXP_TOOL_H + 8 + 20;
+            int cx = c.x + 8 + EXP_TOOL_H + 8 + 20;
             int crumb_limit = exp_tool_x(c, 0) - 10;
             char *p;
             kstrncpy(tmp, ex->path, sizeof(tmp) - 1);
@@ -917,15 +954,18 @@ static void explorer_mouse(void *state, int event, int x, int y, int button, int
         return;
     }
 
-    /* ---- view switch ---------------------------------------------------- */
-    if (ex->prompt == EXP_PROMPT_NONE && y >= 40 && y < 62 && x < 8 + 118) {
-        ex->list_view = (x >= 8 + 58) ? 1 : 0;
+    /* ---- view switch (only when the prompt row is not showing) ---------- */
+    if (ex->prompt == EXP_PROMPT_NONE && ry >= 40 && ry < 62 && rx >= 8 && rx < 8 + 116) {
+        ex->list_view = (rx >= 8 + 58) ? 1 : 0;
         return;
     }
 
-    /* ---- properties panel dismissal ------------------------------------- */
+    /* ---- properties panel: clicking the panel itself keeps it open ------ */
     if (ex->show_props) {
-        /* clicking anywhere in the entry area closes it, the way a popover does */
+        int pw = 320, ph = 150;
+        int px = c.x + c.w - pw - 16;
+        int py = c.y + c.h - ph - 34;
+        if (x >= px && x < px + pw && y >= py && y < py + ph) return;
         ex->show_props = 0;
     }
 
@@ -950,11 +990,18 @@ static void explorer_mouse(void *state, int event, int x, int y, int button, int
         }
     } else {
         int row_h = 22;
-        int idx = (y - 88) / row_h + ex->scroll;
-        if (y >= 88 && idx >= 0 && idx < ex->nent) {
+        int idx = (ry - 88) / row_h + ex->scroll;
+        if (ry >= 88 && ry < c.h - 26 && idx >= 0 && idx < ex->nent) {
             ex->selected = idx;
             if (event == APP_EV_MOUSE_DBLCLICK) exp_open_entry(ex, idx);
+            return;
         }
+    }
+
+    /* A click on empty space clears the selection, the way every file manager
+       behaves -- it also gives the user a way to un-highlight before pasting. */
+    if (event == APP_EV_MOUSE_DOWN && ry > 64) {
+        exp_set_status1(ex, 0, "no selection");
     }
 }
 

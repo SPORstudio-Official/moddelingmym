@@ -31,6 +31,9 @@ typedef struct {
     int  req_slot;                  /* in-flight request, 0 when idle        */
     u32  req_started_ms;
     char req_url[BR_ADDR_MAX];
+    int  search_mode;               /* showing MCP results, not a document    */
+    int  search_scroll;
+    int  search_hover;
     html_doc_t *doc;
 } browser_t;
 
@@ -60,34 +63,10 @@ static void br_normalize(const char *in, char *out, int cap) {
         kstrcpy(out, tmp);
         return;
     }
-    /* A word with no dot is a search, not a host. */
-    if (!kstrchr(tmp, '.')) {
-        char q[BR_ADDR_MAX];
-        int j = 0, k = 0;
-        static const char hex[] = "0123456789ABCDEF";
-        kstrcpy(q, "https://lite.duckduckgo.com/lite/?q=");
-        k = (int)kstrlen(q);
-        for (j = 0; tmp[j] && k < BR_ADDR_MAX - 4; j++) {
-            unsigned char c = (unsigned char)tmp[j];
-            if (c == ' ') q[k++] = '+';
-            else if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                     (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
-                q[k++] = (char)c;
-            else {
-                /* Percent-encode properly.  The old code wrote the literal
-                   sequence "%25" for *every* non-alphanumeric, so a search for
-                   "c++" asked for the literal text "c%25%25" -- and any search
-                   containing punctuation returned nothing. */
-                q[k++] = '%';
-                q[k++] = hex[(c >> 4) & 0xF];
-                q[k++] = hex[c & 0xF];
-            }
-        }
-        q[k] = 0;
-        kstrncpy(out, q, cap - 1);
-        out[cap - 1] = 0;
-        return;
-    }
+    /* A word with no dot used to be rewritten into a DuckDuckGo Lite URL, which
+     * meant every search was really a page fetch of a SERP rendered as prose.
+     * Searches now go to the MCP back end (br_search), so anything that reaches
+     * this point is a host name to be tried as-is. */
     kstrcpy(out, "https://");
     kstrncat(out, tmp, cap - 1 - (int)kstrlen(out));
 }
@@ -101,11 +80,15 @@ static const char *const BR_START_PAGE =
     "<h1>AE Browser</h1>"
     "<p>This is AE's own browser. Type an address above and press Enter, "
     "or pick one of the pages below.</p>"
+    "<p>Type words instead of an address and you get search results. The search "
+    "back end is a free Model Context Protocol server that needs no account, "
+    "and it allows 100 searches a day.</p>"
     "<hr>"
     "<h3>Try these</h3>"
     "<p><a href=\"https://example.com\">example.com</a> - the smallest possible page</p>"
-    "<p><a href=\"https://lite.duckduckgo.com/lite/?q=aether\">DuckDuckGo Lite</a> - "
-    "search the web as plain text, which renders best here</p>"
+    "<h3>Search</h3>"
+    "<p>Type a phrase such as <i>operating system history</i> into the address bar. "
+    "Search results come from the MCP back end and open here as a reading list.</p>"
     "<p><a href=\"https://en.m.wikipedia.org/wiki/Operating_system\">Wikipedia</a> - "
     "article pages, mobile versions are tidier</p>"
     "<hr>"
@@ -252,6 +235,86 @@ static int br_text_width(const html_doc_t *d) {
     return cw - 2 - 24;
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Search (MCP back end)                                                   */
+/* -------------------------------------------------------------------------- */
+
+/* A search result page is built as a local document: the reader already knows
+ * how to lay out headings, links and paragraphs, so results go through exactly
+ * the same path as any other page and get clickable links for free. */
+static void br_show_results(browser_t *b) {
+    static char html[8192];
+    int n = 0, i;
+    int hits = mcp_hits();
+
+    n += ksnprintf(html + n, sizeof(html) - n,
+                   "<html><head><title>search</title></head><body>"
+                   "<h1>Search</h1><p>query: %s</p><hr>",
+                   mcp_query());
+    if (hits <= 0) {
+        n += ksnprintf(html + n, sizeof(html) - n,
+                       "<p>%s</p><p>The search back end is the You.com MCP server, "
+                       "which needs no account and allows %d searches a day.</p>",
+                       mcp_note(), mcp_daily_limit());
+    } else {
+        for (i = 0; i < hits && n < (int)sizeof(html) - 700; i++) {
+            const mcp_hit_t *h = mcp_hit(i);
+            if (!h) continue;
+            n += ksnprintf(html + n, sizeof(html) - n,
+                           "<h3><a href=\"%s\">%s</a></h3><p>%s</p>",
+                           h->url,
+                           h->title[0] ? h->title : h->url,
+                           h->snippet[0] ? h->snippet : h->url);
+        }
+        n += ksnprintf(html + n, sizeof(html) - n,
+                       "<hr><p>%d result%s from the MCP search back end</p>",
+                       hits, hits == 1 ? "" : "s");
+    }
+    n += ksnprintf(html + n, sizeof(html) - n, "</body></html>");
+
+    if (!b->doc) return;
+    b->search_mode = 1;
+    b->search_scroll = 0;
+    b->scroll = 0;
+    html_parse(b->doc, html);
+    html_layout(b->doc, br_text_width(b->doc));
+    b->doc->ok = b->doc->block_count > 0;
+    b->status_kind = 1;
+    ksnprintf(b->status, sizeof(b->status), "%d result%s",
+              hits, hits == 1 ? "" : "s");
+}
+
+static void br_search(browser_t *b, const char *query) {
+    char url[BR_ADDR_MAX];
+    int r;
+
+    /* Ask the MCP server, unless this chassis has no network -- then the reader
+       says so plainly instead of pretending the search ran. */
+    r = mcp_search(query);
+    ksnprintf(url, sizeof(url), "search: %s", query);
+    kstrncpy(b->addr, url, BR_ADDR_MAX - 1);
+    b->addr[BR_ADDR_MAX - 1] = 0;
+    b->addr_sel = 0;
+    b->editing = 0;
+    b->scroll = 0;
+    b->search_scroll = 0;
+    b->search_mode = 1;
+
+    if (r == 0) {
+        b->loading = 1;
+        b->status_kind = 0;
+        ksnprintf(b->status, sizeof(b->status),
+                  "searching with MCP: %s", query);
+        /* The results page is what gets parsed when the reply lands. */
+        if (b->req_slot) { net_abort(b->req_slot); b->req_slot = 0; }
+    } else {
+        b->loading = 0;
+        b->status_kind = 3;
+        ksnprintf(b->status, sizeof(b->status), "%s", mcp_note());
+        br_show_results(b);
+    }
+}
+
 static void br_history_push(browser_t *b, const char *url) {
     int i;
     /* Truncate any forward history, like a real browser. */
@@ -268,9 +331,16 @@ static void br_history_push(browser_t *b, const char *url) {
     }
 }
 
+static void br_search(browser_t *b, const char *query);
+
 static void br_load(browser_t *b, const char *raw) {
     char url[BR_ADDR_MAX];
     html_doc_t *d = b->doc;
+
+    /* A phrase, or a word that is not a host name, is a search: send it to the
+       MCP back end and show the results in a list, which is far more useful in a
+       text reader than a SERP page parsed as prose. */
+    if (mcp_is_search(raw)) { br_search(b, raw); return; }
 
     br_normalize(raw, url, sizeof(url));
     kstrncpy(b->addr, url, BR_ADDR_MAX - 1);
@@ -285,6 +355,7 @@ static void br_load(browser_t *b, const char *raw) {
     /* Local pages never touch the network. */
     if (!kstrncmp(url, "ae://", 9)) {
         const char *page = br_local_page(url);
+        b->search_mode = 0;
         html_parse(d, page);
         html_layout(d, br_text_width(d));
         d->ok = d->block_count > 0;
@@ -299,6 +370,7 @@ static void br_load(browser_t *b, const char *raw) {
        network answered.  browser_tick() polls the slot each frame and calls
        br_complete() when the body is ready. */
     if (b->req_slot) net_abort(b->req_slot);
+    b->search_mode = 0;
     b->req_slot = net_begin(url);
     b->req_started_ms = now_ms();
     b->loading = 1;
@@ -757,6 +829,30 @@ static void browser_layout(void *state, wm_rect_t client) {
 static void browser_tick(void *state, u32 dt_ms) {
     browser_t *b = (browser_t *)state;
     (void)dt_ms;
+
+    /* A search is its own request, tracked by the MCP client rather than by
+       req_slot: it polls its own slot and reports when the reply is parsed. */
+    if (b->loading && mcp_busy()) {
+        if (mcp_poll() != 0) {
+            int before = mcp_hits();
+            int r = mcp_finish();
+            /* A handshake answers with 0 hits and immediately starts the search
+               it was holding, so loading does not end until a reply that was
+               actually a search comes back. */
+            if (r == 0 && mcp_busy()) {
+                b->status_kind = 0;
+                ksnprintf(b->status, sizeof(b->status),
+                          "connected -- searching for %s", mcp_query());
+            } else {
+                b->loading = 0;
+                b->status_kind = (mcp_hits() > 0) ? 1 : 3;
+                ksnprintf(b->status, sizeof(b->status), "%s",
+                          mcp_hits() > 0 ? "search results" : mcp_note());
+                br_show_results(b);
+            }
+            (void)before;
+        }
+    }
 
     /* Finish a request that the host has completed since the last frame. */
     if (b->req_slot) {
