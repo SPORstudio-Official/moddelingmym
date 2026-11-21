@@ -6,15 +6,16 @@ a single Windows executable with its own icon and its own identity.
 
 The whole OS is a freestanding C11 program. It links **no C runtime**: string,
 memory, formatting, heap and floating-point routines are all implemented in the
-kernel itself, so the built executable imports nothing but four Win32 system
-libraries (`kernel32`, `user32`, `gdi32`, `winmm`).
+kernel itself, so the built executable imports nothing beyond six Win32 system
+libraries (`kernel32`, `user32`, `gdi32`, `shell32`, `winmm`, `winhttp`).
 
-`dist/AE.exe` is the whole machine: a 10 KB **launcher** carrying the OS, plus a
-386 KB **resource section** holding the AE icon (16-256 px) and its version
-metadata. The launcher opens the OS in an app-mode window with its own
-AppUserModelID, its own profile in `%LOCALAPPDATA%\AE`, and no browser
-first-run, sync or "restore pages" prompts -- so Windows shows **AE**, in the
-taskbar, the Start menu and in search, not the engine underneath it.
+`dist/AE.exe` is the whole machine, and it is a native program, not a wrapper
+around one. The file holds two executables: a 384 KB launcher owning the AE icon
+(16-256 px), version metadata, AppUserModelID and Start-menu entry, and the OS
+image it extracts to `%LOCALAPPDATA%\AE\AE-0_2_0.exe` and starts. That image has
+its own window, message loop, compositor and HTTP client — Windows never involves
+a browser in rendering AE, so the taskbar, Alt+Tab and Start-menu search all say
+**AE**.
 
 ## Build
 
@@ -124,19 +125,20 @@ npm run exe        # -> dist/AE.exe (Windows, single file, double-click)
 npm run app        # -> dist/AE.html + launchers for every platform
 ```
 
-`dist/AE.exe` is a real Windows executable, not a shortcut: a 10 KB native
-launcher with the whole 1.4 MB machine appended to it as a payload. Double-click
-it and AE opens in its own window. It needs no installer, no runtime, no
-Node, no Electron and no network. The launcher imports only `KERNEL32`,
-`ADVAPI32`, `SHELL32` and `USER32` -- it has no C runtime dependency, so it runs
-on any 64-bit Windows from 7 onward. On start it finds the `<!DOCTYPE html>`
-anchor, writes the payload to `%TEMP%\AE.html`, and opens that file with
-its own private browser profile via a Chromium-family browser in `--app` mode;
-if no such browser exists it hands the file to the default browser instead, and
-every failure path shows a normal Windows message box rather than failing
-silently.
+`dist/AE.exe` is a real Windows program, not a shortcut and not a browser
+launcher: a native launcher with a complete second PE image appended to it.
+Double-click it and AE opens as a Win32 application. It needs no installer, no
+runtime, no Node, no Electron and no browser. The launcher imports only
+`KERNEL32` and `ADVAPI32`; the image it carries adds `USER32`, `GDI32`,
+`SHELL32`, `WINMM` and `WINHTTP`. Neither links a C runtime, so the pair runs on
+any 64-bit Windows 10/11. On start the launcher walks from its payload marker to
+the next `MZ`/PE header, writes that image to `%LOCALAPPDATA%\AE\AE-<tag>.exe`
+(skipping the write when the size already matches, so a second launch is
+instant), starts it with a quoted command line, retries once with a fresh copy if
+the image will not load, and shows a normal Windows message box on any failure
+rather than exiting silently.
 
-`dist/AE.html` is the whole machine in one 1.4 MB file: kernel,
+`dist/AE.html` is the whole machine in one 1.8 MB file: kernel,
 compositor, VFS, scheduler, C compiler, every app and the browser. Double-click
 it and it runs, offline. The generated launchers open it in a chrome-less app
 window so it feels like a program rather than a web page:
@@ -183,16 +185,32 @@ scripts and styling, and lays out the text, headings and links. Article-style
 content -- documentation, wikis, news, search results -- renders very well;
 JavaScript-heavy apps do not, and it says so rather than pretending.
 
-Pages are fetched by the host process, because the wasm module is sandboxed.
-The request is **asynchronous**: the host starts a `fetch()`, the kernel polls
-it once per frame, and the window keeps repainting at full rate while it waits.
-Blocking the module's thread would have frozen the window for the length of the
-request, which is why `net_begin`/`net_poll`/`net_finish` exist alongside the
-simple `net_fetch` used during boot.
+Pages are fetched by the chassis, which differs per build but not per app: the
+wasm shell implements it with `fetch()`, and the Win32 image with WinHTTP against
+the system certificate store. The request is **asynchronous** either way — the
+kernel polls the slot once per frame and the window keeps repainting at full rate
+while it waits. Blocking the frame loop for the length of a request is why
+`net_begin`/`net_poll`/`net_finish` exist alongside the simple `net_fetch` used
+during boot.
 
-Local pages (`ae://about`, `ae://files`, `ae://commands`) never
-touch the network. On the Win32 build, which has no network stack, the browser
-still runs and reports plainly that networking is unavailable.
+Local pages (`ae://about`, `ae://files`, `ae://commands`) never touch the network.
+
+### Search, through MCP
+
+Type words rather than an address and the browser searches. The back end is a
+**Model Context Protocol** server, not a search API: `dev/76_mcp.c` speaks
+JSON-RPC 2.0 over Streamable HTTP to the You.com MCP endpoint's keyless profile,
+which allows 100 queries a day that refill daily with no account, no key and
+nothing to sign up for. That constraint is the reason for the choice — AE ships
+as a single file that anyone can run, so it cannot depend on a credential the
+user has to go and get.
+
+The client performs the `initialize` handshake, keeps the `Mcp-Session-Id` the
+server returns, unwraps server-sent-event replies when the server frames them
+that way, and hands the results to the reader's own HTML path, so results are a
+readable, clickable list. A rate-limit reply is shown as the message the server
+sent rather than a blank page. The wasm build cannot send the POST this needs,
+and says so instead of pretending the search ran.
 
 ## Verification
 

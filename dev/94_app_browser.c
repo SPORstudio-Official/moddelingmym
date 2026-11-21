@@ -4,11 +4,15 @@
  *  A real web browser for AE: address bar, back/forward/reload, a
  *  scrollable document view and clickable links.
  *
- *  Where the page comes from is the host's business.  The kernel calls
- *  net_fetch() in 20_hal.c, which the WebAssembly shell implements with
- *  fetch(); the Win32 build has no network stack, so there it reports that
- *  networking is unavailable and the browser still renders a built-in start
- *  page of local documentation.  Nothing in this file knows the difference.
+ *  Where the page comes from is the chassis's business.  This file calls
+ *  net_begin/net_poll/net_finish in 20_hal.c; the WebAssembly shell implements
+ *  those with fetch() and the Win32 image implements them with WinHTTP.  Nothing
+ *  here knows the difference -- and when a chassis cannot reach the network at
+ *  all, the browser says so in words rather than showing an empty frame.
+ *
+ *  A phrase typed into the address bar is a search, and searches go to the MCP
+ *  client in 76_mcp.c rather than being rewritten into a URL for some search
+ *  engine's HTML page.  Results come back as a document, so links work.
  * ========================================================================== */
 
 #define BR_HISTORY     32
